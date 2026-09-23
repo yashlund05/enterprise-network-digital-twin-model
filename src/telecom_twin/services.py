@@ -135,6 +135,11 @@ class EnterpriseServiceCatalog:
         consumer -> provider
     """
 
+    @classmethod
+    def create_default(cls) -> EnterpriseServiceCatalog:
+        """Factory method creating catalog initialized with default enterprise services."""
+        return cls()
+
     def __init__(
         self,
         services: list[EnterpriseService] | None = None,
@@ -171,6 +176,16 @@ class EnterpriseServiceCatalog:
             )
 
         self.validate_dependencies()
+
+    @property
+    def services(self) -> dict[str, EnterpriseService]:
+        """Return an immutable shallow copy of the services mapping."""
+        return dict(self._services)
+
+    @property
+    def dependencies(self) -> list[ServiceDependency]:
+        """Return an immutable shallow copy of the dependencies list."""
+        return list(self._dependencies)
 
     def get_all_services(self) -> list[EnterpriseService]:
         """Return all registered services in deterministic order by service_id."""

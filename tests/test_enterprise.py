@@ -1628,7 +1628,488 @@ def test_enterprise_rca_legacy_tests_and_functions_preserved() -> None:
     assert all(row["top1_correct"] == 1.0 for row in eval_rows)
 
 
+# ==============================================================================
+# Phase 7A: What-If / Counterfactual Simulation Unit Tests
+# ==============================================================================
 
 
+def test_whatif_scenario_construction() -> None:
+    """Requirement 1: WhatIfScenario instances are created and serialized cleanly."""
+    from telecom_twin.models import WhatIfScenario
+
+    scenarios = [
+        WhatIfScenario("sc-01", "Core Down", "node", "core-sw-01", "node_down", 1.0),
+        WhatIfScenario("sc-02", "Link Latency", "link", "core-sw-01<->dist-sw-dc-01", "latency_spike", 50.0),
+        WhatIfScenario("sc-03", "Node Loss", "node", "dist-sw-dc-01", "packet_loss", 20.0),
+        WhatIfScenario("sc-04", "Throttle", "link", "core-sw-01<->core-sw-02", "bandwidth_throttle", 500.0),
+        WhatIfScenario("sc-05", "Surge", "node", "edge-gw-01", "traffic_surge", 200.0),
+    ]
+    for sc in scenarios:
+        data = sc.to_dict()
+        assert data["scenario_id"] == sc.scenario_id
+        assert data["target_id"] == sc.target_id
+        assert data["parameter_value"] == sc.parameter_value
 
 
+def test_whatif_node_down_scenario() -> None:
+    """Requirement 2: Node failure scenario predicts affected nodes, links, and services."""
+    from telecom_twin.models import WhatIfScenario
+    from telecom_twin.whatif import WhatIfSimulator
+
+    simulator = WhatIfSimulator()
+    scenario = WhatIfScenario("sc-node-down", "Core 1 Down", "node", "core-sw-01", "node_down", 1.0)
+    result = simulator.simulate(scenario)
+
+    assert "core-sw-01" in result.predicted_affected_nodes
+    assert len(result.predicted_affected_links) > 0
+    assert any("core-sw-01" in link for link in result.predicted_affected_links)
+    assert result.severity == "CRITICAL"
+    assert result.blast_radius_percent > 0.0
+
+
+def test_whatif_link_down_scenario() -> None:
+    """Requirement 3: Link down scenario evaluates impact and alternative pathing."""
+    from telecom_twin.models import WhatIfScenario
+    from telecom_twin.whatif import WhatIfSimulator
+
+    simulator = WhatIfSimulator()
+    target_link = "core-sw-01<->dist-sw-dc-01"
+    scenario = WhatIfScenario("sc-link-down", "Interconnect Link Down", "link", target_link, "link_down", 1.0)
+    result = simulator.simulate(scenario)
+
+    assert target_link in result.predicted_affected_links
+    assert isinstance(result.latency_delta_ms, float)
+    assert isinstance(result.blast_radius_percent, float)
+
+
+def test_whatif_node_latency_spike_scenario() -> None:
+    """Requirement 4: Node latency spike predicts positive latency delta."""
+    from telecom_twin.models import WhatIfScenario
+    from telecom_twin.whatif import WhatIfSimulator
+
+    simulator = WhatIfSimulator()
+    scenario = WhatIfScenario("sc-lat-spike", "Dist Latency Spike", "node", "dist-sw-dc-01", "latency_spike", 50.0)
+    result = simulator.simulate(scenario)
+
+    assert result.latency_delta_ms > 0.0
+    assert "dist-sw-dc-01" in result.predicted_affected_nodes
+    assert result.severity in ("HIGH", "MEDIUM", "MODERATE", "CRITICAL")
+
+
+def test_whatif_link_latency_spike_scenario() -> None:
+    """Requirement 5: Link latency spike increases network latency."""
+    from telecom_twin.models import WhatIfScenario
+    from telecom_twin.whatif import WhatIfSimulator
+
+    simulator = WhatIfSimulator()
+    scenario = WhatIfScenario("sc-link-lat", "Core Link Latency", "link", "core-sw-01<->dist-sw-dc-01", "link_latency", 40.0)
+    result = simulator.simulate(scenario)
+
+    assert result.latency_delta_ms >= 0.0
+    assert "core-sw-01<->dist-sw-dc-01" in result.predicted_affected_links
+
+
+def test_whatif_packet_loss_spike_scenario() -> None:
+    """Requirement 6: Packet loss spike increases network loss delta."""
+    from telecom_twin.models import WhatIfScenario
+    from telecom_twin.whatif import WhatIfSimulator
+
+    simulator = WhatIfSimulator()
+    scenario = WhatIfScenario("sc-loss", "DC Dist Loss Spike", "node", "dist-sw-dc-01", "packet_loss", 15.0)
+    result = simulator.simulate(scenario)
+
+    assert result.loss_delta_percent > 0.0
+    assert result.severity in ("HIGH", "CRITICAL", "MEDIUM", "MODERATE")
+
+
+def test_whatif_bandwidth_throttling_scenario() -> None:
+    """Requirement 7: Bandwidth throttling scenario reduces path throughput."""
+    from telecom_twin.models import WhatIfScenario
+    from telecom_twin.whatif import WhatIfSimulator
+
+    simulator = WhatIfSimulator()
+    scenario = WhatIfScenario("sc-throttle", "Core Link Throttle", "link", "core-sw-01<->dist-sw-dc-01", "bandwidth_throttling", 800.0)
+    result = simulator.simulate(scenario)
+
+    assert result.throughput_delta_mbps <= 0.0
+    assert "core-sw-01<->dist-sw-dc-01" in result.predicted_affected_links
+
+
+def test_whatif_traffic_surge_scenario() -> None:
+    """Requirement 8: Traffic surge scenario evaluates congestion and capacity shifts."""
+    from telecom_twin.models import WhatIfScenario
+    from telecom_twin.whatif import WhatIfSimulator
+
+    simulator = WhatIfSimulator()
+    scenario = WhatIfScenario("sc-surge", "Edge Ingress Surge", "node", "edge-gw-01", "traffic_surge", 300.0)
+    result = simulator.simulate(scenario)
+
+    assert "edge-gw-01" in result.predicted_affected_nodes
+    assert isinstance(result.throughput_delta_mbps, float)
+
+
+def test_whatif_redundant_core_failover() -> None:
+    """Requirement 9: Core failover does not cause total network partition due to redundant spine."""
+    from telecom_twin.models import WhatIfScenario
+    from telecom_twin.whatif import WhatIfSimulator
+
+    simulator = WhatIfSimulator()
+    # When core-sw-01 fails, core-sw-02 preserves connectivity
+    scenario = WhatIfScenario("sc-redundancy", "Core 1 Failure", "node", "core-sw-01", "node_down", 1.0)
+    comparison = simulator.compare(scenario)
+
+    # Core switch is isolated in counterfactual scenario
+    assert "core-sw-01" in comparison.result.predicted_affected_nodes
+    # Redundant core switch core-sw-02 preserves host connectivity (all 6 hosts reachable)
+    assert comparison.counterfactual_metrics.get("reachable_hosts_count", 0.0) == 6.0
+
+
+def test_whatif_complete_partition_handling() -> None:
+    """Requirement 10: Isolating an access node handles unreachable paths gracefully."""
+    from telecom_twin.models import WhatIfScenario
+    from telecom_twin.whatif import WhatIfSimulator
+
+    simulator = WhatIfSimulator()
+    # Isolate acc-sw-dc-01
+    scenario = WhatIfScenario("sc-isolate", "Access Switch Down", "node", "acc-sw-dc-01", "node_down", 1.0)
+    result = simulator.simulate(scenario)
+
+    assert "acc-sw-dc-01" in result.predicted_affected_nodes
+    assert result.severity in ("CRITICAL", "HIGH")
+
+
+def test_whatif_service_host_failure() -> None:
+    """Requirement 11: Host failure predicts impacted enterprise services and dependencies."""
+    from telecom_twin.models import WhatIfScenario
+    from telecom_twin.whatif import WhatIfSimulator
+
+    simulator = WhatIfSimulator()
+    scenario = WhatIfScenario("sc-host-erp", "ERP Host Down", "node", "host-erp", "node_down", 1.0)
+    result = simulator.simulate(scenario)
+
+    assert "host-erp" in result.predicted_affected_nodes
+    assert "srv-erp" in result.predicted_affected_services
+
+
+def test_whatif_result_structure_and_dataclass() -> None:
+    """Requirement 12: WhatIfResult contains all required fields and serializes to dict."""
+    from telecom_twin.models import WhatIfResult, WhatIfScenario
+    from telecom_twin.whatif import WhatIfSimulator
+
+    simulator = WhatIfSimulator()
+    scenario = WhatIfScenario("sc-test", "Test", "node", "core-sw-01", "node_down", 1.0)
+    result = simulator.simulate(scenario)
+
+    assert isinstance(result, WhatIfResult)
+    assert isinstance(result.predicted_affected_nodes, tuple)
+    assert isinstance(result.predicted_affected_links, tuple)
+    assert isinstance(result.predicted_affected_services, tuple)
+    assert isinstance(result.latency_delta_ms, float)
+    assert isinstance(result.loss_delta_percent, float)
+    assert isinstance(result.throughput_delta_mbps, float)
+    assert isinstance(result.blast_radius_percent, float)
+    assert isinstance(result.severity, str)
+
+    data = result.to_dict()
+    assert "predicted_affected_nodes" in data
+    assert "blast_radius_percent" in data
+    assert "severity" in data
+
+
+def test_whatif_determinism_across_runs() -> None:
+    """Requirement 13: Identical scenarios produce identical simulation results."""
+    from telecom_twin.models import WhatIfScenario
+    from telecom_twin.whatif import WhatIfSimulator
+
+    simulator = WhatIfSimulator()
+    scenario = WhatIfScenario("sc-det", "Determinism Check", "node", "dist-sw-dc-01", "latency_spike", 25.0)
+
+    res1 = simulator.simulate(scenario)
+    res2 = simulator.simulate(scenario)
+
+    assert res1 == res2
+    assert res1.to_dict() == res2.to_dict()
+
+
+def test_whatif_sandbox_immutability_live_twin() -> None:
+    """Requirement 14: Simulating with live OnlineTwin does not mutate twin state or topology."""
+    from telecom_twin.models import WhatIfScenario
+    from telecom_twin.online import OnlineTwin
+    from telecom_twin.whatif import WhatIfSimulator
+
+    twin = OnlineTwin(mode="enterprise", duration_s=10)
+    twin.advance(3)
+    sync_before = twin.get_sync_state()
+    time_before = twin.timestamp_s
+    latest_before = dict(twin.latest)
+
+    simulator = WhatIfSimulator()
+    scenario = WhatIfScenario("sc-mut", "Destructive Test", "node", "core-sw-01", "node_down", 1.0)
+    res = simulator.simulate(scenario, twin=twin)
+
+    assert "core-sw-01" in res.predicted_affected_nodes
+    # Live twin must be 100% untouched
+    assert twin.get_sync_state() == sync_before
+    assert twin.timestamp_s == time_before
+    assert twin.latest == latest_before
+    assert any(node.node_id == "core-sw-01" for node in twin.nodes)
+
+
+def test_whatif_sandbox_immutability_topology_and_catalog() -> None:
+    """Requirement 15: Production simulator defaults to canonical 22 nodes/44 links and simulation does not mutate them."""
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.models import WhatIfScenario
+    from telecom_twin.services import EnterpriseServiceCatalog
+    from telecom_twin.whatif import WhatIfSimulator
+
+    # Verify production enterprise WhatIfSimulator defaults to canonical topology
+    default_sim = WhatIfSimulator()
+    assert len(default_sim.nodes) == 22
+    assert len(default_sim.links) == 44
+    assert len(default_sim.catalog.services) == 6
+
+    nodes, links = generate_enterprise_topology()
+    catalog = EnterpriseServiceCatalog.create_default()
+    original_node_count = len(nodes)
+    original_link_count = len(links)
+    original_service_count = len(catalog.services)
+
+    assert original_node_count == 22
+    assert original_link_count == 44
+    assert original_service_count == 6
+
+    simulator = WhatIfSimulator(nodes=nodes, links=links, catalog=catalog)
+    scenario = WhatIfScenario("sc-cat-mut", "Node Removal Test", "node", "core-sw-01", "node_down", 1.0)
+    simulator.simulate(scenario)
+
+    assert len(nodes) == 22
+    assert len(links) == 44
+    assert len(catalog.services) == 6
+
+
+# ==============================================================================
+# Phase 7B: Incident Replay Engine Unit Tests
+# ==============================================================================
+
+
+def test_incident_replay_timeline_generation() -> None:
+    """Requirement 16: build_incident_timeline generates valid event tuple."""
+    from telecom_twin.models import IncidentTimelineEvent
+    from telecom_twin.replay import IncidentScenarioConfig, build_incident_timeline
+
+    config = IncidentScenarioConfig(
+        scenario_id="inc-test-01",
+        target_node_id="core-sw-01",
+        fault_type="packet_loss",
+        start_time_s=30,
+        duration_s=60,
+    )
+    timeline = build_incident_timeline(config)
+
+    assert isinstance(timeline, tuple)
+    assert len(timeline) == 6
+    assert all(isinstance(ev, IncidentTimelineEvent) for ev in timeline)
+
+
+def test_incident_replay_all_six_lifecycle_stages_present() -> None:
+    """Requirement 17: Timeline contains all 6 stages in exact canonical lifecycle order."""
+    from telecom_twin.replay import LIFECYCLE_STAGES, build_incident_timeline
+
+    timeline = build_incident_timeline()
+    stages = [ev.stage for ev in timeline]
+
+    assert stages == list(LIFECYCLE_STAGES)
+    assert stages == ["NORMAL", "DEGRADATION", "ANOMALY", "RCA", "IMPACT", "RECOVERY"]
+
+
+def test_incident_replay_strictly_monotonic_timestamps() -> None:
+    """Requirement 18: Timeline timestamps are strictly monotonic (t_i < t_{i+1})."""
+    from telecom_twin.replay import build_incident_timeline
+
+    timeline = build_incident_timeline()
+    timestamps = [ev.timestamp_s for ev in timeline]
+
+    for i in range(len(timestamps) - 1):
+        assert timestamps[i] < timestamps[i + 1]
+
+
+def test_incident_replay_root_cause_timing_constraint() -> None:
+    """Requirement 19: Root cause ID appears no earlier than ANOMALY stage (populated at RCA)."""
+    from telecom_twin.replay import IncidentScenarioConfig, build_incident_timeline
+
+    config = IncidentScenarioConfig(target_node_id="dist-sw-dc-01")
+    timeline = build_incident_timeline(config)
+    stage_map = {ev.stage: ev for ev in timeline}
+
+    # Must be None in early stages
+    assert stage_map["NORMAL"].root_cause_id is None
+    assert stage_map["DEGRADATION"].root_cause_id is None
+    assert stage_map["ANOMALY"].root_cause_id is None
+
+    # Must be identified at RCA and propagated to IMPACT
+    assert stage_map["RCA"].root_cause_id == "dist-sw-dc-01"
+    assert stage_map["IMPACT"].root_cause_id == "dist-sw-dc-01"
+
+
+def test_incident_replay_impact_timing_constraint() -> None:
+    """Requirement 20: Affected services appear no earlier than RCA stage (populated at IMPACT)."""
+    from telecom_twin.replay import IncidentScenarioConfig, build_incident_timeline
+
+    config = IncidentScenarioConfig(target_node_id="host-erp")
+    timeline = build_incident_timeline(config)
+    stage_map = {ev.stage: ev for ev in timeline}
+
+    # Must be empty in stages before IMPACT
+    assert stage_map["NORMAL"].affected_services == ()
+    assert stage_map["DEGRADATION"].affected_services == ()
+    assert stage_map["ANOMALY"].affected_services == ()
+    assert stage_map["RCA"].affected_services == ()
+
+    # Must be populated at IMPACT
+    assert len(stage_map["IMPACT"].affected_services) > 0
+    assert "srv-erp" in stage_map["IMPACT"].affected_services
+
+
+def test_incident_replay_recovery_stage_semantics() -> None:
+    """Requirement 21: Recovery stage clears alarms and occurs strictly after impact."""
+    from telecom_twin.replay import build_incident_timeline
+
+    timeline = build_incident_timeline()
+    stage_map = {ev.stage: ev for ev in timeline}
+
+    impact = stage_map["IMPACT"]
+    recovery = stage_map["RECOVERY"]
+
+    assert recovery.timestamp_s > impact.timestamp_s
+    assert recovery.active_alarms == ()
+    assert recovery.affected_services == ()
+    assert recovery.root_cause_id is None
+    assert "recovered" in recovery.description.lower() or "cleared" in recovery.description.lower()
+
+
+def test_incident_replay_structured_fields_and_serialization() -> None:
+    """Requirement 22: Each event possesses structured fields and serializes to dict."""
+    from telecom_twin.replay import build_incident_timeline
+
+    timeline = build_incident_timeline()
+    for ev in timeline:
+        data = ev.to_dict()
+        assert "timestamp_s" in data
+        assert "stage" in data
+        assert "description" in data
+        assert "active_alarms" in data
+        assert "root_cause_id" in data
+        assert "affected_services" in data
+        assert isinstance(data["stage"], str)
+        assert isinstance(data["timestamp_s"], int)
+
+
+def test_incident_replayer_step_navigation_and_reset() -> None:
+    """Requirement 23: IncidentReplayer steps forward, backward, bounds-checks, and resets."""
+    import pytest
+
+    from telecom_twin.replay import IncidentReplayer
+
+    replayer = IncidentReplayer()
+    assert replayer.current_index == 0
+    assert replayer.current_event.stage == "NORMAL"
+    assert replayer.is_finished is False
+    assert replayer.total_events == 6
+
+    # Step through entire timeline
+    ev1 = replayer.next_step()
+    assert ev1 is not None and ev1.stage == "DEGRADATION"
+    assert replayer.current_index == 1
+
+    replayer.next_step()  # ANOMALY
+    replayer.next_step()  # RCA
+    replayer.next_step()  # IMPACT
+    ev5 = replayer.next_step()  # RECOVERY
+    assert ev5 is not None and ev5.stage == "RECOVERY"
+    assert replayer.is_finished is True
+
+    # At end of timeline, next_step returns None
+    assert replayer.next_step() is None
+
+    # Step back
+    prev_ev = replayer.prev_step()
+    assert prev_ev is not None and prev_ev.stage == "IMPACT"
+    assert replayer.current_index == 4
+
+    # Reset
+    reset_ev = replayer.reset()
+    assert reset_ev.stage == "NORMAL"
+    assert replayer.current_index == 0
+
+    # Index retrieval & bounds
+    assert replayer.get_event_by_index(0).stage == "NORMAL"
+    assert replayer.get_event_by_index(5).stage == "RECOVERY"
+    with pytest.raises(IndexError):
+        replayer.get_event_by_index(99)
+
+
+def test_incident_replayer_timestamp_seek() -> None:
+    """Requirement 24: get_event_by_timestamp locates appropriate event along timeline."""
+    from telecom_twin.replay import (
+        IncidentReplayer,
+        IncidentScenarioConfig,
+        build_incident_timeline,
+    )
+
+    config = IncidentScenarioConfig(start_time_s=30, ramp_s=10, duration_s=60)
+    timeline = build_incident_timeline(config)
+    replayer = IncidentReplayer(timeline)
+
+    # Before start time -> NORMAL (t=15)
+    assert replayer.get_event_by_timestamp(0).stage == "NORMAL"
+    assert replayer.get_event_by_timestamp(20).stage == "NORMAL"
+
+    # At start time -> DEGRADATION (t=30)
+    assert replayer.get_event_by_timestamp(30).stage == "DEGRADATION"
+
+    # Between degradation and anomaly -> DEGRADATION
+    assert replayer.get_event_by_timestamp(35).stage == "DEGRADATION"
+
+    # Beyond recovery -> RECOVERY
+    assert replayer.get_event_by_timestamp(200).stage == "RECOVERY"
+
+
+def test_incident_replayer_live_state_immutability() -> None:
+    """Requirement 25: Incident replay does not mutate live twin or catalog state."""
+    from telecom_twin.online import OnlineTwin
+    from telecom_twin.replay import IncidentReplayer, build_incident_timeline
+    from telecom_twin.services import EnterpriseServiceCatalog
+
+    twin = OnlineTwin(mode="enterprise", duration_s=10)
+    twin.advance(3)
+    sync_before = twin.get_sync_state()
+
+    catalog = EnterpriseServiceCatalog.create_default()
+    services_before = len(catalog.services)
+
+    timeline = build_incident_timeline(catalog=catalog)
+    replayer = IncidentReplayer(timeline)
+    while not replayer.is_finished:
+        replayer.next_step()
+
+    assert twin.get_sync_state() == sync_before
+    assert len(catalog.services) == services_before
+
+
+def test_incident_replay_determinism() -> None:
+    """Requirement 26: Identical configs produce strictly identical replay timelines."""
+    from telecom_twin.replay import IncidentScenarioConfig, build_incident_timeline
+
+    cfg = IncidentScenarioConfig(
+        scenario_id="inc-deterministic",
+        target_node_id="dist-sw-dc-01",
+        fault_type="latency",
+        start_time_s=25,
+        duration_s=50,
+        ramp_s=8,
+    )
+    t1 = build_incident_timeline(cfg)
+    t2 = build_incident_timeline(cfg)
+
+    assert t1 == t2
+    assert [e.to_dict() for e in t1] == [e.to_dict() for e in t2]
