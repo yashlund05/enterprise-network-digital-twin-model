@@ -43,6 +43,26 @@ class TelemetrySample:
     latency_ms: float
     packet_loss_percent: float
     throughput_mbps: float
+    memory_percent: float = 0.0
+    interface_health: float = 1.0
+    error_count: int = 0
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class LinkTelemetrySample:
+    timestamp_s: int
+    source: str
+    target: str
+    latency_ms: float
+    packet_loss_percent: float
+    throughput_mbps: float
+    utilization_percent: float
+    capacity_mbps: float
+    link_status: str = "up"
+    interface_health: float = 1.0
 
     def to_dict(self) -> dict:
         return asdict(self)

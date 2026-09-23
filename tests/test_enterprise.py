@@ -352,3 +352,176 @@ def test_topology_module_reexports_enterprise_generator() -> None:
     assert len(legacy_nodes) == 27
     assert len(legacy_links) == 27
 
+
+def test_enterprise_telemetry_generation_structure_and_bounds() -> None:
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.simulation import EnterpriseTelemetry, generate_enterprise_telemetry
+
+    nodes, links = generate_enterprise_topology()
+    duration = 10
+    telemetry = generate_enterprise_telemetry(nodes, links, duration_s=duration, seed=42)
+
+    assert isinstance(telemetry, EnterpriseTelemetry)
+    assert len(telemetry.node_telemetry) == len(nodes) * (duration + 1)
+    assert len(telemetry.link_telemetry) == len(links) * (duration + 1)
+
+    # Verify all expected nodes receive telemetry
+    observed_nodes = {s.node_id for s in telemetry.node_telemetry}
+    assert observed_nodes == {n.node_id for n in nodes}
+
+    # Verify all expected links receive telemetry
+    observed_links = {(s.source, s.target) for s in telemetry.link_telemetry}
+    assert observed_links == {(l.source, l.target) for l in links}
+
+    # Verify physical sanity bounds
+    for s in telemetry.node_telemetry:
+        assert 0.0 <= s.cpu_percent <= 100.0
+        assert 0.0 <= s.memory_percent <= 100.0
+        assert 0.0 <= s.packet_loss_percent <= 100.0
+        assert s.latency_ms >= 0.0
+        assert s.throughput_mbps >= 0.0
+        assert 0.0 <= s.interface_health <= 1.0
+        assert s.error_count >= 0
+
+    for l in telemetry.link_telemetry:
+        assert l.latency_ms >= 0.0
+        assert 0.0 <= l.packet_loss_percent <= 100.0
+        assert l.throughput_mbps >= 0.0
+        assert 0.0 <= l.utilization_percent <= 100.0
+        assert l.capacity_mbps > 0.0
+        assert l.link_status in ("up", "down")
+        assert 0.0 <= l.interface_health <= 1.0
+
+
+def test_enterprise_telemetry_determinism_and_seed_variation() -> None:
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.simulation import generate_enterprise_telemetry
+
+    nodes, links = generate_enterprise_topology()
+
+    # Same seed -> identical output
+    first = generate_enterprise_telemetry(nodes, links, duration_s=5, seed=77)
+    second = generate_enterprise_telemetry(nodes, links, duration_s=5, seed=77)
+    assert first.node_telemetry == second.node_telemetry
+    assert first.link_telemetry == second.link_telemetry
+
+    # Different seed -> bounded variation
+    third = generate_enterprise_telemetry(nodes, links, duration_s=5, seed=99)
+    assert first.node_telemetry != third.node_telemetry
+
+
+def test_enterprise_telemetry_tier_and_host_profile_differences() -> None:
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.simulation import generate_enterprise_telemetry
+
+    nodes, links = generate_enterprise_topology()
+    telemetry = generate_enterprise_telemetry(nodes, links, duration_s=20, seed=42)
+
+    by_node: dict[str, list] = {}
+    for s in telemetry.node_telemetry:
+        by_node.setdefault(s.node_id, []).append(s)
+
+    # 1. Edge vs Core latency: Edge should have higher latency (WAN/perimeter) than internal Core spine
+    edge_lat = sum(s.latency_ms for s in by_node["edge-gw-01"]) / len(by_node["edge-gw-01"])
+    core_lat = sum(s.latency_ms for s in by_node["core-sw-01"]) / len(by_node["core-sw-01"])
+    assert edge_lat > 5.0
+    assert core_lat < 2.0
+
+    # 2. Host profile differentiation:
+    # DB host should have higher memory utilization than DNS host
+    db_mem = sum(s.memory_percent for s in by_node["host-db"]) / len(by_node["host-db"])
+    dns_mem = sum(s.memory_percent for s in by_node["host-dns"]) / len(by_node["host-dns"])
+    assert db_mem > 65.0
+    assert dns_mem < 30.0
+
+    # ERP host should have substantial CPU and memory
+    erp_cpu = sum(s.cpu_percent for s in by_node["host-erp"]) / len(by_node["host-erp"])
+    erp_mem = sum(s.memory_percent for s in by_node["host-erp"]) / len(by_node["host-erp"])
+    assert erp_cpu > 40.0
+    assert erp_mem > 55.0
+
+
+def test_enterprise_telemetry_fault_scenarios_and_transitions() -> None:
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.simulation import EnterpriseFaultScenario, generate_enterprise_telemetry
+
+    nodes, links = generate_enterprise_topology()
+
+    # Inject CPU saturation on host-api from t=20 to t=40 (ramp 5s)
+    scenario = EnterpriseFaultScenario(
+        target_id="host-api",
+        failure_type="cpu_saturation",
+        start_s=20,
+        end_s=40,
+        severity=1.0,
+        ramp_s=5,
+    )
+    telemetry = generate_enterprise_telemetry(
+        nodes, links, duration_s=60, seed=42, scenarios=[scenario]
+    )
+
+    api_samples = [s for s in telemetry.node_telemetry if s.node_id == "host-api"]
+    sample_by_t = {s.timestamp_s: s for s in api_samples}
+
+    # NORMAL state (t=10): normal baseline CPU (~48%)
+    assert sample_by_t[10].cpu_percent < 60.0
+
+    # DEGRADING state (t=22): ramping up
+    assert sample_by_t[22].cpu_percent > sample_by_t[10].cpu_percent
+
+    # FAULT state (t=30): saturated peak
+    assert sample_by_t[30].cpu_percent > 85.0
+
+    # RECOVERY / POST-RECOVERY state (t=55): recovered back to normal
+    assert sample_by_t[55].cpu_percent < 60.0
+
+
+def test_enterprise_telemetry_node_and_link_down_scenarios() -> None:
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.simulation import EnterpriseFaultScenario, generate_enterprise_telemetry
+
+    nodes, links = generate_enterprise_topology()
+
+    scenarios = [
+        EnterpriseFaultScenario(
+            target_id="acc-sw-hq-01",
+            failure_type="node_down",
+            start_s=15,
+            end_s=35,
+            severity=1.0,
+            ramp_s=2,
+        ),
+        EnterpriseFaultScenario(
+            target_id="edge-gw-01->core-sw-01",
+            failure_type="link_down",
+            start_s=15,
+            end_s=35,
+            severity=1.0,
+            ramp_s=2,
+        ),
+    ]
+
+    telemetry = generate_enterprise_telemetry(
+        nodes, links, duration_s=50, seed=42, scenarios=scenarios
+    )
+
+    # Check node down at peak (t=25)
+    sw_samples = {s.timestamp_s: s for s in telemetry.node_telemetry if s.node_id == "acc-sw-hq-01"}
+    fault_node = sw_samples[25]
+    assert fault_node.interface_health == 0.0
+    assert fault_node.packet_loss_percent == 100.0
+    assert fault_node.throughput_mbps == 0.0
+
+    # Check link down at peak (t=25)
+    link_samples = [
+        l for l in telemetry.link_telemetry
+        if l.source == "edge-gw-01" and l.target == "core-sw-01"
+    ]
+    link_by_t = {l.timestamp_s: l for l in link_samples}
+    fault_link = link_by_t[25]
+    assert fault_link.link_status == "down"
+    assert fault_link.interface_health == 0.0
+    assert fault_link.throughput_mbps == 0.0
+    assert fault_link.packet_loss_percent == 100.0
+
+
