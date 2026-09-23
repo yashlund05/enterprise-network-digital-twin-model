@@ -1,3 +1,4 @@
+import math
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -523,5 +524,149 @@ def test_enterprise_telemetry_node_and_link_down_scenarios() -> None:
     assert fault_link.interface_health == 0.0
     assert fault_link.throughput_mbps == 0.0
     assert fault_link.packet_loss_percent == 100.0
+
+
+def test_enterprise_online_twin_initialization_and_topology() -> None:
+    from telecom_twin.online import OnlineTwin
+
+    # Requirement 1 & 2: initialization succeeds and enterprise topology is loaded
+    twin = OnlineTwin(mode="enterprise", duration_s=10)
+    assert twin.mode == "enterprise"
+    assert len(twin.nodes) == 22
+    assert len(twin.links) == 44
+
+    snapshot = twin.snapshot()
+    assert snapshot["mode"] == "enterprise"
+    assert snapshot["node_count"] == 22
+    assert snapshot["link_count"] == 44
+    assert snapshot["sync_timestamp_s"] == 0 or snapshot["sync_timestamp_s"] == -1
+
+
+def test_enterprise_online_twin_telemetry_snapshot_and_state_matching() -> None:
+    from telecom_twin.models import LinkTelemetrySample, TelemetrySample
+    from telecom_twin.online import OnlineTwin
+
+    twin = OnlineTwin(mode="enterprise", duration_s=10)
+
+    sample_node = TelemetrySample(
+        timestamp_s=5,
+        node_id="core-sw-01",
+        cpu_percent=33.5,
+        latency_ms=0.9,
+        packet_loss_percent=0.002,
+        throughput_mbps=15000.0,
+        memory_percent=31.0,
+        interface_health=1.0,
+        error_count=0,
+    )
+    sample_link = LinkTelemetrySample(
+        timestamp_s=5,
+        source="core-sw-01",
+        target="core-sw-02",
+        latency_ms=0.45,
+        packet_loss_percent=0.001,
+        throughput_mbps=8500.0,
+        utilization_percent=21.25,
+        capacity_mbps=40000.0,
+        link_status="up",
+        interface_health=1.0,
+    )
+
+    # Requirements 3, 4, 5, 6: snapshot updates twin state, nodes, links, and sync timestamp
+    twin.apply_telemetry_snapshot([sample_node], [sample_link], timestamp_s=5)
+
+    assert twin.sync_timestamp_s == 5
+    assert twin.latest["core-sw-01"] == sample_node
+    assert twin.latest_links[("core-sw-01", "core-sw-02")] == sample_link
+
+    snapshot = twin.snapshot()
+    node_state = next(n for n in snapshot["nodes"] if n["node_id"] == "core-sw-01")
+    assert node_state["telemetry"]["cpu_percent"] == 33.5
+
+    link_state = next(
+        l for l in snapshot["links"]
+        if l["source"] == "core-sw-01" and l["target"] == "core-sw-02"
+    )
+    assert link_state["telemetry"]["throughput_mbps"] == 8500.0
+
+
+def test_enterprise_online_twin_staleness_and_sync_status() -> None:
+    from telecom_twin.models import TelemetrySample
+    from telecom_twin.online import OnlineTwin
+
+    twin = OnlineTwin(mode="enterprise", duration_s=20)
+
+    # Apply updates at different timestamps to test synchronized, stale, and missing
+    # Twin current sync time will be t = 10
+    sample_sync = TelemetrySample(10, "edge-gw-01", 30.0, 5.0, 0.0, 5000.0)      # staleness = 0s -> synchronized (<= 2s)
+    sample_stale = TelemetrySample(6, "edge-gw-02", 30.0, 5.0, 0.0, 5000.0)      # staleness = 4s -> stale (2s < s <= 5s)
+    sample_old = TelemetrySample(2, "core-sw-01", 30.0, 5.0, 0.0, 5000.0)        # staleness = 8s -> missing (> 5s)
+    # core-sw-02 will not receive any update -> missing (inf)
+
+    twin.apply_node_telemetry([sample_old], timestamp_s=2)
+    twin.apply_node_telemetry([sample_stale], timestamp_s=6)
+    twin.apply_node_telemetry([sample_sync], timestamp_s=10)
+
+    # Requirements 7, 8, 9: staleness and sync statuses
+    staleness = twin.get_node_staleness()
+    assert staleness["edge-gw-01"] == 0.0
+    assert staleness["edge-gw-02"] == 4.0
+    assert staleness["core-sw-01"] == 8.0
+    assert math.isinf(staleness["core-sw-02"])
+
+    sync_status = twin.get_node_sync_status()
+    assert sync_status["edge-gw-01"] == "synchronized"
+    assert sync_status["edge-gw-02"] == "stale"
+    assert sync_status["core-sw-01"] == "missing"
+    assert sync_status["core-sw-02"] == "missing"
+
+
+def test_enterprise_online_twin_consistency_score() -> None:
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.models import TelemetrySample
+    from telecom_twin.online import OnlineTwin
+
+    # Requirement 10: Complete valid enterprise twin produces complete consistency score (1.0)
+    twin = OnlineTwin(mode="enterprise", duration_s=5)
+    perfect_score = twin.get_topology_consistency()
+    assert perfect_score == 1.0
+
+    # Requirement 11: Incomplete topology or unexpected unknown telemetry lowers consistency
+    nodes, links = generate_enterprise_topology()
+    # Missing half the nodes
+    partial_nodes = nodes[:10]
+    incomplete_twin = OnlineTwin(mode="enterprise", nodes=partial_nodes, links=links)
+    lower_score = incomplete_twin.get_topology_consistency()
+    assert lower_score < perfect_score
+
+    # Unknown phantom node in telemetry lowers consistency
+    phantom_sample = TelemetrySample(5, "phantom-switch-99", 50.0, 10.0, 0.0, 1000.0)
+    twin.apply_node_telemetry(phantom_sample)
+    penalized_score = twin.get_topology_consistency()
+    assert penalized_score < perfect_score
+
+
+def test_enterprise_online_twin_immutability_and_determinism() -> None:
+    from telecom_twin.models import TelemetrySample
+    from telecom_twin.online import OnlineTwin
+
+    # Requirement 12: Applying telemetry does not mutate source objects
+    original_sample = TelemetrySample(3, "host-erp", 50.0, 2.0, 0.0, 1000.0)
+    twin = OnlineTwin(mode="enterprise", duration_s=10)
+    twin.apply_node_telemetry(original_sample)
+    assert original_sample.cpu_percent == 50.0
+    assert original_sample.node_id == "host-erp"
+
+    # Requirement 13: Deterministic inputs produce identical sync state
+    twin_a = OnlineTwin(mode="enterprise", duration_s=10, seed=42)
+    twin_b = OnlineTwin(mode="enterprise", duration_s=10, seed=42)
+
+    twin_a.advance(5)
+    twin_b.advance(5)
+
+    assert twin_a.get_sync_state() == twin_b.get_sync_state()
+    assert twin_a.get_node_staleness() == twin_b.get_node_staleness()
+    assert twin_a.get_node_sync_status() == twin_b.get_node_sync_status()
+
 
 
