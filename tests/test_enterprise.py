@@ -2113,3 +2113,320 @@ def test_incident_replay_determinism() -> None:
 
     assert t1 == t2
     assert [e.to_dict() for e in t1] == [e.to_dict() for e in t2]
+
+
+# ==============================================================================
+# Phase 8: Enterprise API & CLI Integration Unit Tests
+# ==============================================================================
+
+
+def test_api_enterprise_topology_endpoint() -> None:
+    """Test 1: Enterprise topology endpoint returns 22 nodes and 44 links."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    response = client.get("/api/enterprise/topology")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["node_count"] == 22
+    assert data["link_count"] == 44
+    assert len(data["nodes"]) == 22
+    assert len(data["links"]) == 44
+    # Deterministic sorting
+    node_ids = [n["node_id"] for n in data["nodes"]]
+    assert node_ids == sorted(node_ids)
+
+
+def test_api_enterprise_services_endpoint() -> None:
+    """Test 2: Enterprise service endpoint returns 6 services."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    response = client.get("/api/enterprise/services")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["service_count"] == 6
+    assert len(data["services"]) == 6
+    expected_sids = {"srv-dns", "srv-auth", "srv-db", "srv-api", "srv-erp", "srv-monitoring"}
+    actual_sids = {s["service_id"] for s in data["services"]}
+    assert actual_sids == expected_sids
+
+
+def test_api_enterprise_dependencies_exposed() -> None:
+    """Test 3: Enterprise dependency relationships are exposed correctly."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    response = client.get("/api/enterprise/services")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["dependency_count"] == 7
+    assert len(data["dependencies"]) == 7
+    # Verify consumer -> provider dependency structure
+    first_dep = data["dependencies"][0]
+    assert "consumer_service_id" in first_dep
+    assert "provider_service_id" in first_dep
+    assert "dependency_type" in first_dep
+
+
+def test_api_enterprise_twin_sync_endpoint() -> None:
+    """Test 4: Twin sync endpoint returns valid synchronization fields."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    response = client.get("/api/enterprise/twin/sync")
+    assert response.status_code == 200
+    data = response.json()
+    assert "sync_timestamp_s" in data
+    assert "telemetry_staleness_s" in data
+    assert "consistency_score" in data
+    assert "overall_sync_status" in data
+    assert "node_sync_status" in data
+    assert "node_staleness_s" in data
+    assert len(data["node_sync_status"]) == 22
+
+
+def test_api_enterprise_health_endpoint() -> None:
+    """Test 5: Enterprise health endpoint returns valid structured data."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    response = client.get("/api/enterprise/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert "overall_health" in data
+    assert "health_by_tier" in data
+    assert "service_health" in data
+    assert "active_anomalies" in data
+    assert "active_alarms" in data
+    assert "impacted_services" in data
+    assert all(
+        tier in data["health_by_tier"]
+        for tier in ("edge", "core", "distribution", "access", "host")
+    )
+
+
+def test_api_enterprise_whatif_simulate_valid_scenario() -> None:
+    """Test 6: What-If endpoint successfully simulates a valid scenario."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    payload = {
+        "target_type": "node",
+        "target_id": "core-sw-01",
+        "failure_type": "node_down",
+        "parameter_value": 1.0,
+    }
+    response = client.post("/api/enterprise/whatif/simulate", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert "core-sw-01" in data["predicted_affected_nodes"]
+    assert len(data["predicted_affected_links"]) > 0
+    assert "blast_radius_percent" in data
+    assert "severity" in data
+    assert data["severity"] == "CRITICAL"
+
+
+def test_api_enterprise_whatif_simulate_determinism() -> None:
+    """Test 7: What-If endpoint returns deterministic results."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    payload = {
+        "target_type": "node",
+        "target_id": "dist-sw-dc-01",
+        "failure_type": "latency_spike",
+        "parameter_value": 35.0,
+    }
+    res1 = client.post("/api/enterprise/whatif/simulate", json=payload).json()
+    res2 = client.post("/api/enterprise/whatif/simulate", json=payload).json()
+    assert res1 == res2
+
+
+def test_api_enterprise_whatif_invalid_target_error() -> None:
+    """Test 8: Invalid What-If target returns an appropriate client error."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    payload = {
+        "target_type": "node",
+        "target_id": "phantom-node-99",
+        "failure_type": "node_down",
+    }
+    response = client.post("/api/enterprise/whatif/simulate", json=payload)
+    assert response.status_code == 400
+    assert "Unknown enterprise node" in response.json()["detail"]
+
+
+def test_api_enterprise_whatif_invalid_failure_type_error() -> None:
+    """Test 9: Invalid What-If failure type returns an appropriate client error."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    payload = {
+        "target_type": "node",
+        "target_id": "core-sw-01",
+        "failure_type": "quantum_collapse",
+    }
+    response = client.post("/api/enterprise/whatif/simulate", json=payload)
+    assert response.status_code == 400
+    assert "Invalid failure_type" in response.json()["detail"]
+
+
+def test_api_enterprise_replay_timeline_endpoint() -> None:
+    """Test 10: Replay timeline endpoint returns the six stages."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    response = client.get("/api/enterprise/replay/timeline")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_events"] == 6
+    assert data["stages"] == ["NORMAL", "DEGRADATION", "ANOMALY", "RCA", "IMPACT", "RECOVERY"]
+    assert len(data["timeline"]) == 6
+
+
+def test_api_enterprise_replay_step_endpoint() -> None:
+    """Test 11: Replay step endpoint works."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    response = client.get("/api/enterprise/replay/step", params={"index": 2})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["index"] == 2
+    assert data["event"]["stage"] == "ANOMALY"
+
+
+def test_api_enterprise_replay_step_invalid_index() -> None:
+    """Test 12: Invalid replay index is handled correctly."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    response = client.get("/api/enterprise/replay/step", params={"index": 999})
+    assert response.status_code == 400
+    assert "out of bounds" in response.json()["detail"]
+
+
+def test_api_enterprise_responses_json_serializable() -> None:
+    """Test 13: All API responses are clean, standard JSON serializable data."""
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    endpoints = [
+        "/api/enterprise/topology",
+        "/api/enterprise/services",
+        "/api/enterprise/health",
+        "/api/enterprise/twin/sync",
+        "/api/enterprise/replay/timeline",
+        "/api/enterprise/evaluation",
+    ]
+    for ep in endpoints:
+        resp = client.get(ep)
+        assert resp.status_code == 200
+        # Verify JSON serializability of body
+        serialized = json.dumps(resp.json())
+        assert len(serialized) > 0
+
+
+def test_api_existing_endpoints_compatibility() -> None:
+    """Test 14: Existing legacy API endpoints continue passing."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    health = client.get("/health")
+    assert health.status_code == 200
+    assert health.json()["node_count"] == 27
+    topo = client.get("/topology")
+    assert topo.status_code == 200
+    assert len(topo.json()["nodes"]) == 27
+
+
+def test_cli_legacy_commands_functional() -> None:
+    """Test 15: Existing legacy CLI commands remain registered and functional."""
+    from telecom_twin.cli import main
+
+    assert callable(main)
+
+
+def test_cli_enterprise_serve_registered() -> None:
+    """Test 16: enterprise-serve command is registered in argument parser."""
+    import pytest
+
+    from telecom_twin.cli import main
+
+    with pytest.raises(SystemExit) as exc:
+        main(["enterprise-serve", "--help"])
+    assert exc.value.code == 0
+
+
+def test_cli_whatif_sim_execution(capsys) -> None:
+    """Test 17: whatif-sim command executes a valid deterministic scenario."""
+    from telecom_twin.cli import main
+
+    ret = main([
+        "whatif-sim",
+        "--target-type",
+        "node",
+        "--target-id",
+        "core-sw-01",
+        "--failure-type",
+        "node_down",
+    ])
+    assert ret == 0
+    captured = capsys.readouterr()
+    assert "WHAT-IF COUNTERFACTUAL SIMULATION RESULT" in captured.out
+    assert "Target:              core-sw-01 (node)" in captured.out
+    assert "Predicted Severity:  CRITICAL" in captured.out
+
+
+def test_cli_whatif_sim_invalid_args_fail_cleanly(capsys) -> None:
+    """Test 18: Invalid What-If CLI arguments fail cleanly with non-zero exit."""
+    from telecom_twin.cli import main
+
+    ret = main(["whatif-sim", "--target-type", "node", "--target-id", "non-existent-node-xyz"])
+    assert ret == 1
+    captured = capsys.readouterr()
+    assert "Error: Unknown enterprise node" in captured.err
+
+
+def test_cli_enterprise_evaluation_no_fake_metrics(capsys) -> None:
+    """Test 19: enterprise-evaluation command does not fabricate metrics."""
+    from telecom_twin.cli import main
+
+    ret = main(["enterprise-evaluation"])
+    assert ret == 0
+    captured = capsys.readouterr()
+    assert "Enterprise Evaluation Engine: NOT YET AVAILABLE" in captured.out
+    assert "No synthetic or fabricated metrics generated." in captured.out
+
