@@ -669,4 +669,318 @@ def test_enterprise_online_twin_immutability_and_determinism() -> None:
     assert twin_a.get_node_sync_status() == twin_b.get_node_sync_status()
 
 
+# ==============================================================================
+# Phase 4B: Enterprise Anomaly Detection Unit Tests
+# ==============================================================================
+
+
+def test_enterprise_anomaly_detector_initialization() -> None:
+    """Requirement 1: Enterprise detector initializes correctly."""
+    from telecom_twin.online import RollingAnomalyDetector
+
+    det = RollingAnomalyDetector(mode="enterprise")
+    assert det.mode == "enterprise"
+    assert det.threshold == 3.0
+    assert det.window_size == 60
+    assert det.warmup == 30
+
+    custom_det = RollingAnomalyDetector(mode="enterprise", window_size=50, warmup=20, threshold=4.0)
+    assert custom_det.mode == "enterprise"
+    assert custom_det.threshold == 4.0
+    assert custom_det.window_size == 50
+    assert custom_det.warmup == 20
+
+    # Validation errors
+    with pytest.raises(ValueError):
+        RollingAnomalyDetector(mode="enterprise", window_size=10, warmup=15)
+    with pytest.raises(ValueError):
+        RollingAnomalyDetector(mode="enterprise", threshold=-1.0)
+
+
+def test_enterprise_anomaly_detector_warmup() -> None:
+    """Requirement 2: Warm-up period behaves sensibly (returns None during warmup)."""
+    from telecom_twin.models import TelemetrySample
+    from telecom_twin.online import RollingAnomalyDetector
+
+    det = RollingAnomalyDetector(mode="enterprise", warmup=30, window_size=60)
+    node_id = "core-sw-01"
+
+    # First 30 observations (t=0..29) must return None as baseline history builds up
+    for t in range(30):
+        sample = TelemetrySample(t, node_id, 25.0, 2.0, 0.01, 1000.0)
+        event = det.observe(sample)
+        assert event is None
+
+    # 31st observation (t=30) has len(history) == 30 >= warmup; now evaluated
+    sample_31 = TelemetrySample(30, node_id, 25.0, 2.0, 0.01, 1000.0)
+    evaluated = det.evaluate_sample(sample_31)
+    assert evaluated is not None
+    assert evaluated.severity == "NORMAL"
+
+
+def test_enterprise_anomaly_detector_normal_baseline() -> None:
+    """Requirement 3: Normal enterprise baseline does not continuously trigger critical anomalies."""
+    from telecom_twin.models import TelemetrySample
+    from telecom_twin.online import RollingAnomalyDetector
+
+    det = RollingAnomalyDetector(mode="enterprise", warmup=30, window_size=60)
+    node_id = "dist-sw-dc-01"
+
+    # Normal operational samples with realistic slight jitter
+    anomalies = []
+    for t in range(80):
+        jitter = (t % 5 - 2) * 0.02
+        sample = TelemetrySample(t, node_id, 30.0 + jitter * 2, 2.5 + jitter, 0.02 + abs(jitter) * 0.01, 500.0)
+        event = det.observe(sample)
+        if event is not None:
+            anomalies.append(event)
+
+    # In steady-state normal operation, no spurious critical anomalies
+    assert len(anomalies) == 0
+
+
+def test_enterprise_anomaly_detector_single_metric_latency_fault() -> None:
+    """Requirement 4: A latency-only fault produces elevated latency evidence."""
+    from telecom_twin.models import TelemetrySample
+    from telecom_twin.online import RollingAnomalyDetector
+
+    det = RollingAnomalyDetector(mode="enterprise", warmup=30, window_size=60)
+    node = "host-erp"
+
+    # Establish baseline
+    for t in range(35):
+        jitter = (t % 3) * 0.05
+        det.observe(TelemetrySample(t, node, 20.0, 2.0 + jitter, 0.01, 1000.0))
+
+    # Inject sharp latency spike
+    spike_sample = TelemetrySample(35, node, 20.0, 25.0, 0.01, 1000.0)
+    event = det.observe(spike_sample)
+
+    assert event is not None
+    assert event.node_id == node
+    assert event.latency_z >= 3.0
+    assert "latency anomaly" in event.evidence
+    assert "packet loss anomaly" not in event.evidence
+    assert "cpu anomaly" not in event.evidence
+    assert event.metric == "latency_ms"
+
+
+def test_enterprise_anomaly_detector_single_metric_loss_fault() -> None:
+    """Requirement 5: A packet-loss fault produces elevated loss evidence."""
+    from telecom_twin.models import TelemetrySample
+    from telecom_twin.online import RollingAnomalyDetector
+
+    det = RollingAnomalyDetector(mode="enterprise", warmup=30, window_size=60)
+    node = "edge-gw-01"
+
+    # Establish baseline
+    for t in range(35):
+        det.observe(TelemetrySample(t, node, 25.0, 3.0, 0.02 + (t % 2) * 0.01, 800.0))
+
+    # Inject packet loss fault
+    loss_sample = TelemetrySample(35, node, 25.0, 3.0, 12.0, 800.0)
+    event = det.observe(loss_sample)
+
+    assert event is not None
+    assert event.node_id == node
+    assert event.loss_z >= 3.0
+    assert "packet loss anomaly" in event.evidence
+    assert "latency anomaly" not in event.evidence
+    assert "cpu anomaly" not in event.evidence
+    assert event.metric == "packet_loss_percent"
+
+
+def test_enterprise_anomaly_detector_single_metric_cpu_fault() -> None:
+    """Requirement 6: A CPU-saturation fault produces elevated CPU evidence."""
+    from telecom_twin.models import TelemetrySample
+    from telecom_twin.online import RollingAnomalyDetector
+
+    det = RollingAnomalyDetector(mode="enterprise", warmup=30, window_size=60)
+    node = "host-db"
+
+    # Establish baseline
+    for t in range(35):
+        det.observe(TelemetrySample(t, node, 30.0 + (t % 3) * 0.5, 2.0, 0.01, 1000.0))
+
+    # Inject CPU saturation fault
+    cpu_sample = TelemetrySample(35, node, 98.0, 2.0, 0.01, 1000.0)
+    event = det.observe(cpu_sample)
+
+    assert event is not None
+    assert event.node_id == node
+    assert event.cpu_z >= 3.0
+    assert "cpu anomaly" in event.evidence
+    assert "latency anomaly" not in event.evidence
+    assert "packet loss anomaly" not in event.evidence
+    assert event.metric == "cpu_percent"
+
+
+def test_enterprise_anomaly_detector_multi_metric_vs_single_metric() -> None:
+    """Requirement 7: Multi-metric fault produces higher composite score than single-metric fault."""
+    from telecom_twin.models import TelemetrySample
+    from telecom_twin.online import RollingAnomalyDetector
+
+    det_single = RollingAnomalyDetector(mode="enterprise", warmup=30, window_size=60)
+    det_multi = RollingAnomalyDetector(mode="enterprise", warmup=30, window_size=60)
+    node = "dist-sw-dc-01"
+
+    # Establish identical baselines
+    for t in range(35):
+        jitter = (t % 3) * 0.05
+        sample = TelemetrySample(t, node, 25.0 + jitter, 2.0 + jitter, 0.01 + jitter * 0.01, 1000.0)
+        det_single.observe(sample)
+        det_multi.observe(sample)
+
+    # In det_single, inject only latency fault
+    single_sample = TelemetrySample(35, node, 25.0, 20.0, 0.01, 1000.0)
+    single_event = det_single.observe(single_sample)
+
+    # In det_multi, inject combined latency + loss + cpu fault
+    multi_sample = TelemetrySample(35, node, 92.0, 20.0, 8.0, 1000.0)
+    multi_event = det_multi.observe(multi_sample)
+
+    assert single_event is not None
+    assert multi_event is not None
+    assert multi_event.composite_z > single_event.composite_z
+    assert len(multi_event.evidence) > len(single_event.evidence)
+    assert "latency anomaly" in multi_event.evidence
+    assert "packet loss anomaly" in multi_event.evidence
+    assert "cpu anomaly" in multi_event.evidence
+
+
+def test_enterprise_anomaly_detector_severity_boundaries() -> None:
+    """Requirement 8: Severity boundaries work exactly (below 3 -> normal, 3.0 -> info, 4.0 -> warning, 5.0 -> critical)."""
+    from telecom_twin.online import RollingAnomalyDetector
+
+    # below 3 -> NORMAL
+    assert RollingAnomalyDetector.severity_for_score(0.0) == "NORMAL"
+    assert RollingAnomalyDetector.severity_for_score(1.5) == "NORMAL"
+    assert RollingAnomalyDetector.severity_for_score(2.9999) == "NORMAL"
+
+    # 3.0 <= Z < 4.0 -> INFO
+    assert RollingAnomalyDetector.severity_for_score(3.0) == "INFO"
+    assert RollingAnomalyDetector.severity_for_score(3.5) == "INFO"
+    assert RollingAnomalyDetector.severity_for_score(3.9999) == "INFO"
+
+    # 4.0 <= Z < 5.0 -> WARNING
+    assert RollingAnomalyDetector.severity_for_score(4.0) == "WARNING"
+    assert RollingAnomalyDetector.severity_for_score(4.5) == "WARNING"
+    assert RollingAnomalyDetector.severity_for_score(4.9999) == "WARNING"
+
+    # Z >= 5.0 -> CRITICAL
+    assert RollingAnomalyDetector.severity_for_score(5.0) == "CRITICAL"
+    assert RollingAnomalyDetector.severity_for_score(7.2) == "CRITICAL"
+    assert RollingAnomalyDetector.severity_for_score(50.0) == "CRITICAL"
+
+
+def test_enterprise_anomaly_detector_temporal_recovery() -> None:
+    """Requirement 9: Recovery telemetry causes anomaly state to return toward normal."""
+    from telecom_twin.models import TelemetrySample
+    from telecom_twin.online import RollingAnomalyDetector
+
+    det = RollingAnomalyDetector(mode="enterprise", warmup=30, window_size=60)
+    node = "host-api"
+
+    # Baseline: 35 samples
+    for t in range(35):
+        det.observe(TelemetrySample(t, node, 20.0, 2.0, 0.01, 1000.0))
+
+    # Injected fault at t=35..39
+    fault_events = []
+    for t in range(35, 40):
+        ev = det.observe(TelemetrySample(t, node, 90.0, 30.0, 10.0, 1000.0))
+        if ev is not None:
+            fault_events.append(ev)
+    assert len(fault_events) > 0
+
+    # At t=40, metrics recover back to baseline
+    recovered_sample = TelemetrySample(40, node, 20.0, 2.0, 0.01, 1000.0)
+    recovery_event = det.observe(recovered_sample)
+    # The detector immediately transitions out of anomalous state
+    assert recovery_event is None
+
+    evaluated = det.evaluate_sample(recovered_sample)
+    assert evaluated is not None
+    assert evaluated.severity == "NORMAL"
+    assert evaluated.composite_z == 0.0
+
+
+def test_enterprise_anomaly_detector_zero_variance_and_numerical_safety() -> None:
+    """Requirement 10: Zero-variance and extreme inputs produce no NaN, Inf, or ZeroDivisionError."""
+    import math
+
+    from telecom_twin.models import TelemetrySample
+    from telecom_twin.online import RollingAnomalyDetector
+
+    det = RollingAnomalyDetector(mode="enterprise", warmup=30, window_size=60)
+    node = "static-device"
+
+    # Constant metrics with zero variance
+    for t in range(35):
+        sample = TelemetrySample(t, node, 10.0, 1.0, 0.0, 100.0)
+        det.observe(sample)
+
+    # Same constant metric
+    safe_sample = TelemetrySample(35, node, 10.0, 1.0, 0.0, 100.0)
+    evaluated = det.evaluate_sample(safe_sample)
+    assert evaluated is not None
+    assert evaluated.composite_z == 0.0
+    assert not math.isnan(evaluated.composite_z)
+    assert not math.isinf(evaluated.composite_z)
+
+    # Static helper handles NaN, Inf, and empty cleanly
+    assert RollingAnomalyDetector._z(float("nan"), [1.0, 2.0, 3.0]) == 0.0
+    assert RollingAnomalyDetector._z(float("inf"), [1.0, 2.0, 3.0]) == 0.0
+    assert RollingAnomalyDetector._z(5.0, []) == 0.0
+    assert RollingAnomalyDetector._z(5.0, [float("nan"), float("inf")]) == 0.0
+
+
+def test_enterprise_anomaly_detector_determinism() -> None:
+    """Requirement 11: Same input sequence gives identical anomaly outputs."""
+    from telecom_twin.models import TelemetrySample
+    from telecom_twin.online import RollingAnomalyDetector
+
+    det_1 = RollingAnomalyDetector(mode="enterprise", warmup=30, window_size=60)
+    det_2 = RollingAnomalyDetector(mode="enterprise", warmup=30, window_size=60)
+    node = "core-sw-02"
+
+    events_1 = []
+    events_2 = []
+    for t in range(60):
+        val = 2.0 if t < 35 else 25.0
+        s1 = TelemetrySample(t, node, 20.0, val, 0.01, 1000.0)
+        s2 = TelemetrySample(t, node, 20.0, val, 0.01, 1000.0)
+        e1 = det_1.observe(s1)
+        e2 = det_2.observe(s2)
+        if e1 is not None:
+            events_1.append(e1)
+        if e2 is not None:
+            events_2.append(e2)
+
+    assert events_1 == events_2
+    assert len(events_1) > 0
+
+
+def test_enterprise_online_twin_detector_integration() -> None:
+    """OnlineTwin enterprise mode integrates RollingAnomalyDetector with enterprise features."""
+    from telecom_twin.online import OnlineTwin
+
+    twin = OnlineTwin(mode="enterprise", duration_s=150, seed=42)
+    assert twin.detector.mode == "enterprise"
+    assert twin.detector.threshold == 3.0
+
+    # Advance through simulation
+    twin.advance(100)
+    assert twin.timestamp_s == 99
+
+    # Verify event structure when anomalies occur
+    for ev in twin.events:
+        assert hasattr(ev, "composite_z")
+        assert hasattr(ev, "severity")
+        assert hasattr(ev, "evidence")
+        assert ev.severity in ("INFO", "WARNING", "CRITICAL")
+        assert isinstance(ev.evidence, tuple)
+
+
+
 

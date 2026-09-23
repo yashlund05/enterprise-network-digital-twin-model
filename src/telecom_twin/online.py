@@ -49,59 +49,191 @@ class AnomalyEvent:
     loss_z: float
     cpu_z: float
     metric: str
+    composite_z: float = 0.0
+    severity: str = "CRITICAL"
+    evidence: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        data = asdict(self)
+        if isinstance(data.get("evidence"), tuple):
+            data["evidence"] = list(data["evidence"])
+        return data
 
 
 class RollingAnomalyDetector:
-    """Per-node rolling z-score detector evaluated before baseline updates."""
+    """Per-node rolling z-score detector evaluated before baseline updates.
 
-    def __init__(self, *, window_size: int = 60, warmup: int = 30, threshold: float = 5.0):
+    Supports two operational modes:
+    - 'legacy': Replicates original v1.0.0 telecom behavior using single-metric
+      maximum threshold comparison (default threshold: 5.0).
+    - 'enterprise': Multivariate anomaly scoring across enterprise telemetry metrics
+      (latency, packet loss, CPU utilization) using a weighted composite z-score,
+      ordered severity tiers (NORMAL, INFO, WARNING, CRITICAL), and triggered
+      component evidence extraction.
+
+    Mathematical Specifications:
+    - Composite z-score formula:
+        Z_composite = 0.40 * Z_latency + 0.35 * Z_loss + 0.25 * Z_cpu
+    - Ordered severity mapping:
+        NORMAL:   Z_composite < 3.0
+        INFO:     3.0 <= Z_composite < 4.0
+        WARNING:  4.0 <= Z_composite < 5.0
+        CRITICAL: Z_composite >= 5.0
+    - Warmup handling: First (warmup - 1) samples for each node return None.
+    - Zero/near-zero variance safety: When variance < min_std (1e-6) and delta < min_std,
+      z-score returns 0.0 without division by zero, NaN, or infinity.
+    - Temporal recovery: One-sided z-score (max(0, delta / std)) immediately drops to 0.0
+      when metric values recover to or below the baseline mean.
+    """
+
+    def __init__(
+        self,
+        *,
+        window_size: int = 60,
+        warmup: int = 30,
+        threshold: float | None = None,
+        mode: str = "legacy",
+    ):
         if not 2 <= warmup <= window_size:
             raise ValueError("warmup must be between 2 and window_size")
-        if threshold <= 0:
+        if threshold is not None and threshold <= 0:
             raise ValueError("threshold must be positive")
         self.window_size = window_size
         self.warmup = warmup
-        self.threshold = threshold
+        self.mode = mode
+        if threshold is None:
+            self.threshold = 3.0 if mode == "enterprise" else 5.0
+        else:
+            self.threshold = threshold
         self._history: dict[str, deque[TelemetrySample]] = defaultdict(
             lambda: deque(maxlen=window_size)
         )
 
     @staticmethod
-    def _z(value: float, baseline: list[float]) -> float:
-        mean = sum(baseline) / len(baseline)
-        variance = sum((item - mean) ** 2 for item in baseline) / len(baseline)
-        return max(0.0, (value - mean) / max(math.sqrt(variance), 1e-6))
+    def _z(value: float, baseline: list[float], min_std: float = 1e-6) -> float:
+        if not baseline or math.isnan(value) or math.isinf(value):
+            return 0.0
+        clean_baseline = [v for v in baseline if not (math.isnan(v) or math.isinf(v))]
+        if not clean_baseline:
+            return 0.0
+        mean = sum(clean_baseline) / len(clean_baseline)
+        variance = sum((item - mean) ** 2 for item in clean_baseline) / len(clean_baseline)
+        std = math.sqrt(max(0.0, variance))
+        delta = value - mean
+        if delta <= 0.0:
+            return 0.0
+        if std < min_std:
+            if delta < min_std:
+                return 0.0
+            return max(0.0, delta / min_std)
+        z = delta / std
+        if math.isnan(z) or math.isinf(z):
+            return 0.0
+        return max(0.0, z)
+
+    @staticmethod
+    def compute_composite_score(
+        latency_z: float,
+        loss_z: float,
+        cpu_z: float,
+    ) -> float:
+        """Compute the weighted enterprise composite anomaly score.
+
+        Z_composite = 0.40 * Z_latency + 0.35 * Z_loss + 0.25 * Z_cpu
+        """
+        score = 0.40 * latency_z + 0.35 * loss_z + 0.25 * cpu_z
+        return round(max(0.0, score), 6)
+
+    @staticmethod
+    def severity_for_score(score: float) -> str:
+        """Map composite z-score to ordered severity category."""
+        if score >= 5.0:
+            return "CRITICAL"
+        if score >= 4.0:
+            return "WARNING"
+        if score >= 3.0:
+            return "INFO"
+        return "NORMAL"
+
+    @staticmethod
+    def extract_evidence(
+        latency_z: float,
+        loss_z: float,
+        cpu_z: float,
+        threshold: float = 3.0,
+    ) -> tuple[str, ...]:
+        """Identify triggered components exceeding the component threshold."""
+        evidence: list[str] = []
+        if latency_z >= threshold:
+            evidence.append("latency anomaly")
+        if loss_z >= threshold:
+            evidence.append("packet loss anomaly")
+        if cpu_z >= threshold:
+            evidence.append("cpu anomaly")
+        return tuple(evidence)
+
+    def evaluate_sample(self, sample: TelemetrySample) -> AnomalyEvent | None:
+        """Evaluate a sample against rolling baseline history without mutating history."""
+        history = self._history[sample.node_id]
+        if len(history) < self.warmup:
+            return None
+
+        latency_z = self._z(sample.latency_ms, [row.latency_ms for row in history])
+        loss_z = self._z(
+            sample.packet_loss_percent,
+            [row.packet_loss_percent for row in history],
+        )
+        cpu_z = self._z(sample.cpu_percent, [row.cpu_percent for row in history])
+        scores = {
+            "latency_ms": latency_z,
+            "packet_loss_percent": loss_z,
+            "cpu_percent": cpu_z,
+        }
+        metric, dominant_score = max(scores.items(), key=lambda item: item[1])
+
+        if self.mode == "legacy":
+            composite_z = self.compute_composite_score(latency_z, loss_z, cpu_z)
+            if dominant_score >= self.threshold:
+                return AnomalyEvent(
+                    timestamp_s=sample.timestamp_s,
+                    node_id=sample.node_id,
+                    score=round(dominant_score, 6),
+                    latency_z=round(latency_z, 6),
+                    loss_z=round(loss_z, 6),
+                    cpu_z=round(cpu_z, 6),
+                    metric=metric,
+                    composite_z=composite_z,
+                    severity="CRITICAL",
+                    evidence=self.extract_evidence(latency_z, loss_z, cpu_z),
+                )
+            return None
+
+        composite_z = self.compute_composite_score(latency_z, loss_z, cpu_z)
+        severity = self.severity_for_score(composite_z)
+        evidence = self.extract_evidence(latency_z, loss_z, cpu_z)
+
+        return AnomalyEvent(
+            timestamp_s=sample.timestamp_s,
+            node_id=sample.node_id,
+            score=composite_z,
+            latency_z=round(latency_z, 6),
+            loss_z=round(loss_z, 6),
+            cpu_z=round(cpu_z, 6),
+            metric=metric,
+            composite_z=composite_z,
+            severity=severity,
+            evidence=evidence,
+        )
 
     def observe(self, sample: TelemetrySample) -> AnomalyEvent | None:
+        """Observe sample, evaluate against history, and update rolling baseline."""
         history = self._history[sample.node_id]
-        event = None
-        if len(history) >= self.warmup:
-            latency_z = self._z(sample.latency_ms, [row.latency_ms for row in history])
-            loss_z = self._z(
-                sample.packet_loss_percent,
-                [row.packet_loss_percent for row in history],
-            )
-            cpu_z = self._z(sample.cpu_percent, [row.cpu_percent for row in history])
-            scores = {
-                "latency_ms": latency_z,
-                "packet_loss_percent": loss_z,
-                "cpu_percent": cpu_z,
-            }
-            metric, score = max(scores.items(), key=lambda item: item[1])
-            if score >= self.threshold:
-                event = AnomalyEvent(
-                    sample.timestamp_s,
-                    sample.node_id,
-                    round(score, 6),
-                    round(latency_z, 6),
-                    round(loss_z, 6),
-                    round(cpu_z, 6),
-                    metric,
-                )
+        event = self.evaluate_sample(sample)
         history.append(sample)
+        if event is None:
+            return None
+        if self.mode == "enterprise" and (event.composite_z < self.threshold or event.severity == "NORMAL"):
+            return None
         return event
 
 
@@ -180,7 +312,7 @@ class OnlineTwin:
             self.unknown_telemetry_nodes: set[str] = set()
             self.events: list[AnomalyEvent] = []
             self.current_anomalies: list[AnomalyEvent] = []
-            self.detector = RollingAnomalyDetector()
+            self.detector = RollingAnomalyDetector(mode=self.mode)
             if self.mode == "enterprise":
                 return self._enterprise_snapshot_unlocked()
             return self._snapshot_unlocked()
