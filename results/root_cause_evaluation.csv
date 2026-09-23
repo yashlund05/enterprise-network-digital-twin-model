@@ -1,0 +1,4 @@
+scenario_id,root_cause,affected_node_count,observed_alarm_count,predicted_root,true_root_rank,top1_correct,top3_correct,top_score
+scenario-01,access-07,1,1,access-07,1,1.0,1.0,1.08
+scenario-02,aggregation-03,4,3,aggregation-03,1,1.0,1.0,0.7
+scenario-03,core-02,9,11,core-02,1,1.0,1.0,0.9490909090909091

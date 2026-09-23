@@ -1,0 +1,9 @@
+metric,value
+samples_processed,8127
+incident_start_s,123
+first_detection_s,124
+detection_delay_s,1
+true_anomaly_events,6
+false_anomaly_events,0
+node_seconds,8127
+false_events_per_1000_node_seconds,0.0

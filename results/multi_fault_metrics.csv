@@ -1,0 +1,10 @@
+metric,value
+trial_count,2160
+global_exact_match,0.2384259259259259
+correlated_exact_match,0.6319444444444443
+global_root_recall,0.5972222222222221
+correlated_root_recall,0.7983796296296295
+service_recall,0.9432484567901235
+service_jaccard,0.8419448825351603
+worst_noise_correlated_exact_match,0.3041666666666667
+worst_noise_service_recall,0.8703869047619046

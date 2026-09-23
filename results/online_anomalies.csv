@@ -1,0 +1,7 @@
+timestamp_s,node_id,score,latency_z,loss_z,cpu_z,metric
+124,access-07,41.798946,41.798946,28.210188,0.0,latency_ms
+125,access-07,15.229152,15.229152,14.383545,2.755512,latency_ms
+126,access-07,10.460208,10.460208,10.359468,4.933199,latency_ms
+127,access-07,8.33922,8.33922,8.099091,5.409461,latency_ms
+128,access-07,6.984301,6.954918,6.984301,5.689713,packet_loss_percent
+129,access-07,6.220141,6.150351,6.220141,6.048653,packet_loss_percent

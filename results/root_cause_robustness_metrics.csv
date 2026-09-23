@@ -1,0 +1,8 @@
+metric,value
+trial_count,4860
+topology_macro_top1_accuracy,0.6955761316872429
+temporal_macro_top1_accuracy,0.7475308641975308
+topology_macro_top3_accuracy,0.8466049382716049
+temporal_macro_top3_accuracy,0.8784979423868312
+topology_worst_noise_macro_top1,0.4138888888888889
+temporal_worst_noise_macro_top1,0.5370370370370371

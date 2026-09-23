@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "telecom-network-digital-twin"
+version = "1.0.0"
+description = "Synthetic telecom network operations and telemetry-strategy simulator"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "FengDK666"}]
+dependencies = [
+  "fastapi>=0.110,<1",
+  "matplotlib>=3.5",
+  "pillow>=9",
+  "uvicorn>=0.27,<1",
+]
+
+[project.optional-dependencies]
+dev = ["httpx>=0.27", "pytest>=7", "ruff>=0.6", "starlette>=0.46,<1"]
+
+[project.scripts]
+telecom-twin = "telecom_twin.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
