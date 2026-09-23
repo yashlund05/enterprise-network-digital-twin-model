@@ -982,5 +982,386 @@ def test_enterprise_online_twin_detector_integration() -> None:
         assert isinstance(ev.evidence, tuple)
 
 
+# ==============================================================================
+# Phase 5A & 5B: Enterprise Service Catalog & Impact Analysis Unit Tests
+# ==============================================================================
+
+
+def test_enterprise_service_catalog_all_six_services() -> None:
+    """Requirement 1: All six required enterprise services exist with correct metadata."""
+    from telecom_twin.services import EnterpriseServiceCatalog, build_default_service_catalog
+
+    catalog = EnterpriseServiceCatalog()
+    services = catalog.get_all_services()
+    assert len(services) == 6
+
+    expected_ids = {
+        "srv-dns",
+        "srv-auth",
+        "srv-db",
+        "srv-api",
+        "srv-erp",
+        "srv-monitoring",
+    }
+    actual_ids = {s.service_id for s in services}
+    assert actual_ids == expected_ids
+
+    # Check names
+    service_map = {s.service_id: s for s in services}
+    assert service_map["srv-dns"].name == "Enterprise DNS"
+    assert service_map["srv-auth"].name == "Enterprise Authentication / SSO"
+    assert service_map["srv-db"].name == "Enterprise PostgreSQL Database"
+    assert service_map["srv-api"].name == "Internal API Gateway"
+    assert service_map["srv-erp"].name == "Enterprise ERP"
+    assert service_map["srv-monitoring"].name == "Network & System Monitoring"
+
+    # Default function works identically
+    raw_services, raw_deps = build_default_service_catalog()
+    assert len(raw_services) == 6
+    assert len(raw_deps) == 7
+
+
+def test_enterprise_service_catalog_unique_ids() -> None:
+    """Requirement 2: Service IDs and names are unique."""
+    from telecom_twin.services import EnterpriseServiceCatalog
+
+    catalog = EnterpriseServiceCatalog()
+    services = catalog.get_all_services()
+
+    ids = [s.service_id for s in services]
+    assert len(ids) == len(set(ids))
+
+    names = [s.name for s in services]
+    assert len(names) == len(set(names))
+
+
+def test_enterprise_service_catalog_host_node_mapping() -> None:
+    """Requirement 3: Host-node IDs map to actual enterprise topology nodes."""
+    from telecom_twin.enterprise_topology import HOST_NODE_IDS
+    from telecom_twin.services import EnterpriseServiceCatalog
+
+    catalog = EnterpriseServiceCatalog()
+    for service in catalog.get_all_services():
+        assert service.host_node_id in HOST_NODE_IDS
+
+    # Specific canonical mappings
+    assert catalog.get_service("srv-dns").host_node_id == "host-dns"
+    assert catalog.get_service("srv-auth").host_node_id == "host-auth"
+    assert catalog.get_service("srv-db").host_node_id == "host-db"
+    assert catalog.get_service("srv-api").host_node_id == "host-api"
+    assert catalog.get_service("srv-erp").host_node_id == "host-erp"
+    assert catalog.get_service("srv-monitoring").host_node_id == "host-mon"
+
+
+def test_enterprise_service_catalog_dependency_validation() -> None:
+    """Requirement 4: Dependency references are validated against registered services."""
+    from telecom_twin.models import EnterpriseService, ServiceDependency
+    from telecom_twin.services import EnterpriseServiceCatalog
+
+    # Valid catalog passes
+    catalog = EnterpriseServiceCatalog()
+    catalog.validate_dependencies()
+
+    # Invalid consumer
+    bad_dep_1 = ServiceDependency("unknown-consumer", "srv-dns", "sync")
+    with pytest.raises(ValueError, match="unknown consumer"):
+        EnterpriseServiceCatalog(dependencies=[bad_dep_1])
+
+    # Invalid provider
+    s1 = EnterpriseService("s1", "S1", "tier-1", "host-dns", 80, "tier-1", "healthy")
+    bad_dep_2 = ServiceDependency("s1", "unknown-provider", "sync")
+    with pytest.raises(ValueError, match="unknown provider"):
+        EnterpriseServiceCatalog(services=[s1], dependencies=[bad_dep_2])
+
+
+def test_enterprise_service_catalog_dependency_direction() -> None:
+    """Requirement 5: Dependency direction is strictly consumer -> provider."""
+    from telecom_twin.services import EnterpriseServiceCatalog
+
+    catalog = EnterpriseServiceCatalog()
+    graph = catalog.graph
+
+    # srv-api -> srv-auth
+    assert graph.has_edge("srv-api", "srv-auth")
+    assert not graph.has_edge("srv-auth", "srv-api")
+
+    # srv-api -> srv-db
+    assert graph.has_edge("srv-api", "srv-db")
+    assert not graph.has_edge("srv-db", "srv-api")
+
+    # srv-erp -> srv-api, srv-db, srv-auth
+    assert graph.has_edge("srv-erp", "srv-api")
+    assert graph.has_edge("srv-erp", "srv-db")
+    assert graph.has_edge("srv-erp", "srv-auth")
+
+    # srv-auth -> srv-dns, srv-db -> srv-dns
+    assert graph.has_edge("srv-auth", "srv-dns")
+    assert graph.has_edge("srv-db", "srv-dns")
+    assert not graph.has_edge("srv-dns", "srv-auth")
+    assert not graph.has_edge("srv-dns", "srv-db")
+
+
+def test_enterprise_service_catalog_is_acyclic() -> None:
+    """Requirement 6: The dependency graph is acyclic."""
+    from telecom_twin.services import EnterpriseServiceCatalog
+
+    catalog = EnterpriseServiceCatalog()
+    assert catalog.is_acyclic() is True
+    assert catalog.detect_cycles() == []
+
+
+def test_enterprise_service_catalog_direct_dependency_traversal() -> None:
+    """Requirement 7: Direct dependency traversal works accurately."""
+    from telecom_twin.services import EnterpriseServiceCatalog
+
+    catalog = EnterpriseServiceCatalog()
+
+    # Direct dependencies of consumer
+    assert catalog.get_direct_dependencies("srv-api") == ["srv-auth", "srv-db"]
+    assert catalog.get_direct_dependencies("srv-erp") == ["srv-api", "srv-auth", "srv-db"]
+    assert catalog.get_direct_dependencies("srv-auth") == ["srv-dns"]
+    assert catalog.get_direct_dependencies("srv-db") == ["srv-dns"]
+    assert catalog.get_direct_dependencies("srv-dns") == []
+    assert catalog.get_direct_dependencies("srv-monitoring") == []
+
+    # Direct consumers of provider
+    assert catalog.get_direct_consumers("srv-dns") == ["srv-auth", "srv-db"]
+    assert catalog.get_direct_consumers("srv-api") == ["srv-erp"]
+    assert catalog.get_direct_consumers("srv-erp") == []
+
+
+def test_enterprise_service_catalog_transitive_dependency_traversal() -> None:
+    """Requirement 8: Transitive dependency traversal works accurately."""
+    from telecom_twin.services import EnterpriseServiceCatalog
+
+    catalog = EnterpriseServiceCatalog()
+
+    # ERP transitively depends on API, DB, Auth, and DNS
+    erp_deps = catalog.get_transitive_dependencies("srv-erp")
+    assert erp_deps == {"srv-api", "srv-auth", "srv-db", "srv-dns"}
+
+    # Consumers that depend on DNS (all 4 core services depend on DNS!)
+    dns_consumers = catalog.get_transitive_consumers("srv-dns")
+    assert dns_consumers == {"srv-auth", "srv-db", "srv-api", "srv-erp"}
+
+    # Consumers that depend on API
+    api_consumers = catalog.get_transitive_consumers("srv-api")
+    assert api_consumers == {"srv-erp"}
+
+    # Monitoring has no consumers and no dependencies
+    assert catalog.get_transitive_consumers("srv-monitoring") == set()
+    assert catalog.get_transitive_dependencies("srv-monitoring") == set()
+
+
+def test_enterprise_infrastructure_valid_paths_to_service_hosts() -> None:
+    """Requirement 9: Valid paths exist from enterprise network into service hosts."""
+    from telecom_twin.impact import ServiceImpactAnalyzer
+
+    analyzer = ServiceImpactAnalyzer()
+    for service in analyzer.catalog.get_all_services():
+        paths = analyzer.get_service_paths(service.service_id)
+        assert len(paths) > 0
+        for path in paths:
+            # Each path must start at an ingress node and end at the service host
+            assert path[0] in analyzer._ingress_nodes
+            assert path[-1] == service.host_node_id
+            assert len(path) >= 4  # ingress -> dist -> access -> host
+
+
+def test_enterprise_infrastructure_service_host_mapping_determinism() -> None:
+    """Requirement 10: Service host mapping is deterministic."""
+    from telecom_twin.services import EnterpriseServiceCatalog
+
+    catalog_1 = EnterpriseServiceCatalog()
+    catalog_2 = EnterpriseServiceCatalog()
+
+    for host in ("host-erp", "host-api", "host-db", "host-dns", "host-auth", "host-mon"):
+        res_1 = catalog_1.get_services_by_host(host)
+        res_2 = catalog_2.get_services_by_host(host)
+        assert res_1 == res_2
+        assert len(res_1) == 1
+
+
+def test_enterprise_infrastructure_path_redundancy() -> None:
+    """Requirement 11: Path calculation handles redundant connectivity correctly."""
+    from telecom_twin.impact import ServiceImpactAnalyzer
+
+    analyzer = ServiceImpactAnalyzer()
+    erp_paths = analyzer.get_service_paths("srv-erp")
+
+    # There should be multiple shortest paths from campus access switches and edge gateways to host-erp
+    assert len(erp_paths) >= 6
+    spine_switches_used = {
+        node for path in erp_paths for node in path if node.startswith("core-sw-")
+    }
+    # Both core spines should be utilized across redundant paths
+    assert "core-sw-01" in spine_switches_used
+    assert "core-sw-02" in spine_switches_used
+
+
+def test_enterprise_service_impact_dns_failure_propagation() -> None:
+    """Requirement 12: DNS failure propagates to Auth/DB/API/ERP as expected."""
+    from telecom_twin.impact import analyze_service_impact
+
+    # Fail host-dns
+    report = analyze_service_impact(failed_nodes=["host-dns"])
+
+    # Directly impacted: srv-dns
+    assert "srv-dns" in report.directly_impacted_services
+
+    # Transitively impacted: srv-auth, srv-db, srv-api, srv-erp
+    expected_transitive = {"srv-auth", "srv-db", "srv-api", "srv-erp"}
+    assert set(report.transitively_impacted_services) == expected_transitive
+
+    # Monitoring is unaffected
+    assert report.service_statuses["srv-monitoring"] == "healthy"
+
+    # All 5 affected services are unavailable
+    for s_id in ("srv-dns", "srv-auth", "srv-db", "srv-api", "srv-erp"):
+        assert report.service_statuses[s_id] == "unavailable"
+
+
+def test_enterprise_service_impact_api_failure_propagation() -> None:
+    """Requirement 13: API failure impacts ERP but does not falsely impact DNS."""
+    from telecom_twin.impact import analyze_service_impact
+
+    report = analyze_service_impact(failed_nodes=["host-api"])
+
+    # Direct: srv-api
+    assert report.directly_impacted_services == ("srv-api",)
+
+    # Transitive: srv-erp
+    assert report.transitively_impacted_services == ("srv-erp",)
+
+    # Provider dependencies of API (DNS, DB, Auth) must NOT be impacted
+    assert report.service_statuses["srv-dns"] == "healthy"
+    assert report.service_statuses["srv-auth"] == "healthy"
+    assert report.service_statuses["srv-db"] == "healthy"
+    assert report.service_statuses["srv-monitoring"] == "healthy"
+
+
+def test_enterprise_service_impact_redundant_core_failure() -> None:
+    """Requirement 14: A single redundant core failure does not automatically make services unavailable."""
+    from telecom_twin.impact import analyze_service_impact
+
+    # Fail only core-sw-01 (core-sw-02 remains online)
+    report = analyze_service_impact(failed_nodes=["core-sw-01"])
+
+    assert report.directly_affected_nodes == ("core-sw-01",)
+    assert len(report.affected_paths) > 0
+
+    # No service should be marked unavailable because alternate path through core-sw-02 exists!
+    for s_id, status in report.service_statuses.items():
+        assert status != "unavailable", f"Service {s_id} falsely declared unavailable despite core redundancy"
+        assert status in ("healthy", "degraded")
+
+    # Severity should be warning (degraded redundancy), not critical
+    assert report.overall_severity == "warning"
+
+
+def test_enterprise_service_impact_host_failure_marks_unavailable() -> None:
+    """Requirement 15: A true service-host failure marks the corresponding service unavailable."""
+    from telecom_twin.impact import analyze_service_impact
+
+    report = analyze_service_impact(failed_nodes=["host-erp"])
+
+    assert "srv-erp" in report.directly_impacted_services
+    assert report.service_statuses["srv-erp"] == "unavailable"
+    assert report.overall_severity == "critical"
+
+
+def test_enterprise_service_impact_direct_vs_transitive_distinction() -> None:
+    """Requirement 16: Direct and transitive impact are distinguished correctly."""
+    from telecom_twin.impact import analyze_service_impact
+
+    report = analyze_service_impact(failed_nodes=["host-auth"])
+
+    # Directly impacted: srv-auth
+    assert report.directly_impacted_services == ("srv-auth",)
+
+    # Transitively impacted: API and ERP
+    assert set(report.transitively_impacted_services) == {"srv-api", "srv-erp"}
+
+    # Sets must be disjoint
+    direct_set = set(report.directly_impacted_services)
+    transitive_set = set(report.transitively_impacted_services)
+    assert len(direct_set & transitive_set) == 0
+
+
+def test_enterprise_service_impact_blast_radius_calculation() -> None:
+    """Requirement 17: Blast Radius Index is calculated correctly as ratio [0, 1] and percent."""
+    from telecom_twin.impact import analyze_service_impact
+
+    # Baseline with no failures
+    normal_report = analyze_service_impact()
+    assert normal_report.blast_radius_index == 0.0
+    assert normal_report.blast_radius_percent == 0.0
+    assert normal_report.overall_severity == "normal"
+
+    # DNS failure impacts 5 out of 6 services (weights: 5 * 3.0 = 15.0; total: 5 * 3.0 + 2.0 = 17.0)
+    dns_report = analyze_service_impact(failed_nodes=["host-dns"])
+    expected_bri = round(15.0 / 17.0, 4)  # ~0.8824
+    assert dns_report.blast_radius_index == expected_bri
+    assert dns_report.blast_radius_percent == round(expected_bri * 100.0, 2)
+
+    # API failure impacts API and ERP (weights: 3.0 + 3.0 = 6.0; total = 17.0)
+    api_report = analyze_service_impact(failed_nodes=["host-api"])
+    expected_api_bri = round(6.0 / 17.0, 4)  # ~0.3529
+    assert api_report.blast_radius_index == expected_api_bri
+    assert api_report.blast_radius_percent == round(expected_api_bri * 100.0, 2)
+
+
+def test_enterprise_service_impact_criticality_weights() -> None:
+    """Requirement 18: Service criticality weights affect BRI correctly."""
+    from telecom_twin.impact import analyze_service_impact
+
+    custom_weights = {"tier-1": 10.0, "tier-2": 1.0, "tier-3": 1.0}
+    # DNS failure with custom weights: 5 * 10.0 = 50.0; total = 50.0 + 1.0 = 51.0
+    report = analyze_service_impact(
+        failed_nodes=["host-dns"], criticality_weights=custom_weights
+    )
+    expected_bri = round(50.0 / 51.0, 4)  # ~0.9804
+    assert report.blast_radius_index == expected_bri
+
+
+def test_enterprise_service_impact_determinism() -> None:
+    """Requirement 19: Same topology + same failures gives identical impact output."""
+    from telecom_twin.impact import analyze_service_impact
+
+    report_a = analyze_service_impact(failed_nodes=["dist-sw-dc-01"], failed_links=[("edge-gw-01", "core-sw-01")])
+    report_b = analyze_service_impact(failed_nodes=["dist-sw-dc-01"], failed_links=[("edge-gw-01", "core-sw-01")])
+
+    assert report_a == report_b
+    assert report_a.to_dict() == report_b.to_dict()
+
+    what_if = report_a.to_what_if_result()
+    assert what_if.blast_radius_percent == report_a.blast_radius_percent
+    assert what_if.severity == report_a.overall_severity
+
+
+def test_enterprise_service_impact_immutability() -> None:
+    """Requirement 20: Input topology and dependency graph are not mutated."""
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.impact import ServiceImpactAnalyzer
+    from telecom_twin.services import EnterpriseServiceCatalog
+
+    nodes, links = generate_enterprise_topology()
+    catalog = EnterpriseServiceCatalog()
+
+    orig_node_count = len(nodes)
+    orig_link_count = len(links)
+    orig_service_count = len(catalog.get_all_services())
+    orig_dep_graph_nodes = len(catalog.graph.nodes())
+
+    analyzer = ServiceImpactAnalyzer(nodes=nodes, links=links, catalog=catalog)
+    analyzer.analyze(failed_nodes=["core-sw-01", "host-erp"], failed_links=[("edge-gw-01", "core-sw-01")])
+
+    assert len(nodes) == orig_node_count
+    assert len(links) == orig_link_count
+    assert len(catalog.get_all_services()) == orig_service_count
+    assert len(catalog.graph.nodes()) == orig_dep_graph_nodes
+
+
+
 
 
