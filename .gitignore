@@ -9,3 +9,5 @@ dist/
 results/raw/
 *.log
 .env
+.coverage
+coverage.xml

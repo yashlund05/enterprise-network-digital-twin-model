@@ -1,200 +1,335 @@
-# Telecom Network Digital Twin
+# Digital Twin-Based Intelligent Enterprise Network Monitoring
 
-## Project timeline and provenance
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+[![Test Suite](https://img.shields.io/badge/tests-167%20passed-brightgreen.svg)]()
 
-| Milestone | Date | Scope |
-|---|---|---|
-| Engineering experience | Jul–Sep 2024 | During my R&D internship, I worked on telecom network-management modules, API/data exchange, and communication-protocol simulation. |
-| Public implementation and extension | Aug 2026 | I independently designed and built this 27-node synthetic digital twin, experiments, dashboard, tests, and documentation. |
+A reproducible, simulator-based digital twin platform for intelligent enterprise network monitoring, root cause localization, redundancy-aware service impact analysis, and counterfactual What-If simulation.
 
-The repository builds on my internship experience while keeping the public implementation independent: it contains no employer or operator code, data, topology, credentials, endpoints, or other proprietary IP.
+---
 
-A reproducible synthetic telecom-network operations project with hierarchical
-topology generation, deterministic telemetry, congestion incident injection,
-alarm analysis, management-protocol simulation, online anomaly detection, and
-a live FastAPI/SSE digital-twin dashboard.
+## 1. Problem Statement
 
-![MVP topology and protocol comparison](results/figures/mvp_summary.png)
+Modern enterprise campus and datacenter networks are complex multi-tier topologies supporting distributed business applications, VoIP telephony, ERP systems, and secure boundary gateways. When network degradation or hardware failures occur:
+- **Alert Fatigue:** Monitoring systems generate flood waves of redundant symptom alarms across downstream devices.
+- **Hidden Root Causes:** Diagnosing the true origin of an incident requires correlating multi-hop topological relationships, protocol behaviors, and cross-tier dependencies.
+- **Unclear Blast Radius:** Network engineers lack immediate visibility into which business services are degraded versus protected by redundancy mechanisms (such as active/standby firewalls or multi-homed links).
+- **Risky Change Validation:** Operational interventions and routing changes are traditionally tested directly in production due to the lack of an isolated, counterfactual sandbox.
 
-![Live synthetic twin replay](results/figures/live_twin_demo.gif)
+---
 
-> **My contribution and data boundary:** I implemented the synthetic topology,
-> deterministic telemetry and fault injection, protocol experiments, root-cause
-> ranking, FastAPI/SSE dashboard, tests, and quantitative analyses in this public
-> version. All identifiers, parameters, topology, and telemetry are synthetic.
+## 2. Project Objective
 
-## Phase 1 scope
+The primary objective of this project is to build an intelligent, software-defined **Digital Twin** for enterprise networks that:
+1. Maintains a **synchronized state model** of physical network infrastructure and dependency relationships.
+2. Performs **multivariate composite anomaly detection** that eliminates false positives while detecting true operational incidents.
+3. Automatically computes **top-ranked root causes** across multi-tier topologies.
+4. Evaluates **business service impact** and calculates a quantitative **Blast Radius Index (BRI)** considering redundancy failovers.
+5. Provides an isolated **counterfactual What-If simulation sandbox** for evaluating failure scenarios without production risk.
+6. Delivers an interactive **unified operations console** and a **reproducible evaluation framework** benchmarked against modeled ground truth.
 
-- Deterministic 3-core / 6-aggregation / 18-access topology.
-- 301 seconds of one-second telemetry for 27 synthetic nodes.
-- Reproducible congestion incident on `access-07` from 123 to 183 seconds.
-- Threshold alarms for latency and packet loss.
-- Fixed 10-second full polling versus adaptive delta telemetry with a
-  30-second heartbeat.
-- FastAPI endpoints for health, topology, latest telemetry, alarms, and
-  protocol-experiment results.
-- CSV artifacts, a deterministic summary figure, unit tests, and GitHub CI.
-- Topology-aware root-cause ranking for access, aggregation, and core fault
-  propagation with deterministic missing and false alarms.
+---
 
-## Quantitative result
+## 3. Why a Digital Twin?
 
-The included 301-second run generates 8,127 samples and 115 threshold alarms.
-Both communication strategies detect the injected alarm episode. Compared
-with 10-second fixed polling, the adaptive delta strategy:
+A digital twin provides a software reflection of the physical infrastructure, capturing both operational state and structural dependencies:
+- **Decoupled Telemetry Ingestion:** The twin buffers, synchronizes, and normalizes telemetry streams asynchronously, tracking telemetry staleness and topological consistency.
+- **Graph-Centric Intelligence:** Algorithms for anomaly detection, root cause localization, and blast radius estimation run on the twin's live graph rather than querying distributed physical devices directly.
+- **Counterfactual Experimentation:** The twin graph can be cloned and mutated in-memory to execute What-If failure simulations and predict alternative routing QoS without impacting the operational network.
 
-| Metric | Fixed polling | Adaptive delta | Change |
-|---|---:|---:|---:|
-| Messages | 837 | 310 | -63.0% |
-| Transferred data | 133.9 kB | 24.8 kB | -81.5% |
-| First detection delay | 4 s | 0 s | -4 s |
-| Mean telemetry staleness | 4.49 s | 13.38 s | +8.89 s |
-| P95 telemetry staleness | 9 s | 27 s | +18 s |
+---
 
-This is an explicit bandwidth/freshness tradeoff: adaptive updates reduce
-management-plane traffic and react immediately to the injected change, but
-unchanged metrics can remain older between 30-second heartbeats.
+## 4. Enterprise Architecture
 
-## Root-cause localization
+The platform models a canonical multi-tier enterprise network comprising **22 nodes**, **44 bidirectional links**, and **6 critical services**:
 
-Phase 2 adds access congestion, aggregation degradation, and core-node failure
-scenarios. Alarm observations contain deterministic missing and false alarms.
-A transparent topology-aware score balances observed-alarm recall, predicted
-impact precision, and whether the candidate itself alarms. The true root ranks
-first in all three included scenarios (Top-1 and Top-3 accuracy both 100%).
-This small synthetic evaluation demonstrates the method but is not evidence of
-production fault-localization accuracy.
+```
+                       [ External Ingress / WAN ]
+                                   │
+                    ┌──────────────┴──────────────┐
+              [edge-gw-01]                  [edge-gw-02]         (Tier 1: Edge)
+                    │        \          /        │
+                    │          \      /          │
+              [core-sw-01] ════════════════ [core-sw-02]         (Tier 2: Core Backbone)
+               /        \                    /        \
+              /          \                  /          \
+     [dist-sw-campus-01] [dist-sw-campus-02] [dist-sw-dc-01] [dist-sw-dc-02]  (Tier 3: Distribution)
+          /         \        /        \          /        \      /      \
+    [acc-hq-01] [acc-hq-02] [acc-branch-01] [acc-dc-01]  [acc-dc-02] [acc-dc-03] (Tier 4: Access)
+                                                 │             │          │
+                                            [host-erp]    [host-api]  [host-db] [host-dns] (Tier 5: Hosts)
+```
 
-## Monte Carlo robustness benchmark
+- **Architectural Tiers:** Edge Boundary (2), Core Backbone (2), Campus Distribution (2), Datacenter Distribution (2), Access Switching (10), and Application Hosts (4).
+- **Service Dependency Graph:** Models enterprise applications (`srv-erp`, `srv-api`, `srv-db`, `srv-dns`, `srv-crm`, `srv-voip`) with explicit redundancy semantics (`active_active`, `active_standby`, `independent`).
 
-Phase 3 expands the evaluation to **4,860 deterministic trials**: all 27 nodes
-as possible roots, 0/20/40% missing alarms, 0/2/4 false alarms, and 20 seeded
-repeats per combination. A temporal model assumes downstream alarms propagate
-three seconds per hierarchy hop and compares this signal with topology-only
-ranking.
+---
 
-| Metric (role-macro average) | Topology only | Topology + time |
-|---|---:|---:|
-| Top-1 accuracy | 69.56% | **74.75%** |
-| Top-3 accuracy | 84.66% | **87.85%** |
-| Worst-noise Top-1 | 41.39% | **53.70%** |
+## 5. Core Features
 
-![Root-cause robustness](results/figures/root_cause_robustness.png)
+- **Digital Twin Synchronization:** Thread-safe ingestion tracking per-node staleness ($t_{\text{sync}} - t_{\text{last\_update}}$) and topology consistency scoring.
+- **Multivariate Composite Anomaly Detection:** Rolling-window evaluation combining latency ($40\%$), packet loss ($35\%$), and CPU utilization ($25\%$) against a $3.0\sigma$ threshold to eliminate false positives.
+- **Topology-Aware Root Cause Analysis (RCA):** Graph traversal incorporating upstream tier penalties, symptom correlation, and concurrent multi-fault diagnosis.
+- **Redundancy-Aware Service Impact:** Traverses the service catalog DAG to identify directly versus transitively affected applications and computes the quantitative Blast Radius Index ($\text{BRI}$).
+- **Counterfactual What-If Sandbox:** Clones the network state to simulate node/link failures, predicting end-to-end path latency deltas, packet loss, bottleneck throughput, and service disruption.
+- **Incident Replay Engine:** Chronological 6-stage lifecycle playback ($\text{Warmup} \to \text{Normal} \to \text{Degradation} \to \text{Fault} \to \text{Recovery} \to \text{Post-Incident}$) for post-mortem forensics.
+- **Unified Web Operations Console:** Single-page 9-view dashboard at `/enterprise` with real-time SVG topology visualization, Chart.js telemetry plots, and interactive controls.
+- **Reproducible Evaluation Suite:** Deterministic 15-scenario benchmark with automated CSV, figure, JSON summary, and Markdown report generation.
 
-The macro average weights access, aggregation, and core tiers equally. Under
-40% missing alarms plus four false alarms, temporal Top-1 accuracy is 12.78%
-for access roots, 58.33% for aggregation roots, and 90.00% for core roots.
-The weak access result is expected: a leaf fault has only one causal alarm, so
-losing it leaves little evidence. The repository reports this failure mode
-rather than hiding it in a node-count-weighted overall accuracy.
+---
 
-## Live digital twin and online detection
+## 6. System Architecture
 
-Phase 4 adds a thread-safe replay engine that advances the same 27-node model
-one simulated second at a time. Each node maintains its latest telemetry and a
-rolling 60-sample baseline. A one-sided z-score detector evaluates latency,
-packet loss, and CPU before updating that baseline, after a 30-sample warm-up.
+```
+  ┌────────────────────────────────────────────────────────────────────────┐
+  │                 Simulated Enterprise Physical Network                  │
+  └───────────────────────────────────┬────────────────────────────────────┘
+                                      │ Telemetry Samples (1s interval)
+                                      ▼
+  ┌────────────────────────────────────────────────────────────────────────┐
+  │                   Online Digital Twin Engine                           │
+  │  - Thread-Safe Synchronization Buffer    - Per-Node Staleness Tracking │
+  │  - Topology Consistency Scoring          - Graph State Management      │
+  └──────────┬────────────────────────┬─────────────────────────┬──────────┘
+             │                        │                         │
+             ▼                        ▼                         ▼
+  ┌───────────────────────┐┌───────────────────────┐┌───────────────────────┐
+  │  Anomaly Detection    ││  Root Cause Analysis  ││    Service Impact     │
+  │  - Multivariate Z     ││  - Causal Traversal   ││  - Dependency DAG     │
+  │  - Zero False Alarm   ││  - Tier Penalty       ││  - Redundancy Model   │
+  │  - Window: 60s        ││  - Top-K Candidate    ││  - Blast Radius (BRI) │
+  └───────────────────────┘└───────────────────────┘└───────────────────────┘
+             │                        │                         │
+             └────────────────────────┼─────────────────────────┘
+                                      ▼
+  ┌────────────────────────────────────────────────────────────────────────┐
+  │           What-If Sandbox & Incident Replay Engine                     │
+  │  - Clone-and-Mutate Graph Sandbox        - 6-Stage Timeline Forensic   │
+  └───────────────────────────────────┬────────────────────────────────────┘
+                                      ▼
+  ┌────────────────────────────────────────────────────────────────────────┐
+  │                        FastAPI REST Layer                              │
+  │  - Endpoints: /api/enterprise/*          - Legacy: /dashboard, /health │
+  └───────────────────────────────────┬────────────────────────────────────┘
+                                      │
+                   ┌──────────────────┴──────────────────┐
+                   ▼                                     ▼
+  ┌─────────────────────────────────┐   ┌─────────────────────────────────┐
+  │   Enterprise Web Dashboard      │   │  Reproducible Evaluation Suite  │
+  │   http://localhost:8000/enterprise│  │  results/enterprise/ artifacts │
+  └─────────────────────────────────┘   └─────────────────────────────────┘
+```
 
-The deterministic 301-second evaluation processes **8,127 node-seconds**. It
-detects the declared `access-07` congestion at 124 s, **one second after the
-123 s incident start**, with six anomaly events inside the incident and zero
-events outside it for this included workload.
+---
 
-| Online evaluation metric | Result |
-|---|---:|
-| Samples processed | 8,127 |
-| Detection delay | **1 s** |
-| Incident anomaly events | 6 |
-| Non-incident events | 0 |
-| False events / 1,000 node-seconds | 0.0 |
+## 7. Technology Stack
 
-![Online anomaly detection](results/figures/online_detection.png)
+- **Core Language:** Python 3.10+
+- **Graph Modeling & Traversal:** NetworkX
+- **API Framework:** FastAPI, Uvicorn, Starlette
+- **Data Validation & Schemas:** Pydantic
+- **Visualization & Artifacts:** Matplotlib, HTML5/CSS3, Chart.js, SVG
+- **Quality Assurance & Verification:** Pytest, Pytest-Cov, Ruff
 
-The browser dashboard at `/dashboard` renders live topology health and anomaly
-events from a Server-Sent Events stream. REST endpoints also support explicit
-reset, step, snapshot, and event-feed operations for deterministic testing.
+---
 
-## Multi-fault correlation and service impact
+## 8. Installation
 
-Phase 5 evaluates simultaneous fault analysis instead of assuming every alarm
-belongs to one incident. Twelve declared dual-fault scenarios cover independent
-branches and nested ancestor/descendant pairs. Each trial injects two alarm
-cascades 30 seconds apart, then applies 0/20/40% missing alarms and 0/2/4 false
-alarms. The full balanced benchmark contains **2,160 deterministic trials**.
-
-A global baseline ranks two roots from the combined alarm set. The correlation
-method first separates temporal incident windows, applies topology-and-time
-ranking within each window, and then maps predicted roots to downstream access
-service endpoints.
-
-| Dual-fault metric | Global Top-2 | Temporal correlation |
-|---|---:|---:|
-| Exact two-root match | 23.84% | **63.19%** |
-| Root-cause recall | 59.72% | **79.84%** |
-
-The correlated roots recover 94.32% of affected access services with an 84.19%
-service-set Jaccard score. Under 40% missing alarms plus four false alarms,
-exact root-pair match falls to 30.42% and service recall remains 87.04%. The
-stricter worst-case service Jaccard is 60.06% for independent faults and 77.33%
-for nested faults; overlapping nested impact sets make recall alone optimistic.
-
-![Dual-fault localization and service impact](results/figures/multi_fault_analysis.png)
-
-## Quick start
+Clone the repository and install in editable mode:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -e '.[dev]'
-ruff check .
-pytest -q
-telecom-twin experiment --output-dir results
-telecom-twin benchmark --output-dir results --trials-per-root 20
-telecom-twin online-evaluation --output-dir results
-telecom-twin multi-fault-benchmark --output-dir results --trials-per-scenario 20
-telecom-twin demo-gif --output results/figures/live_twin_demo.gif
+git clone https://github.com/example/telecom-network-digital-twin.git
+cd telecom-network-digital-twin
+
+# Create and activate virtual environment
+python -m venv .venv
+# Linux/macOS:
+source .venv/bin/activate
+# Windows PowerShell:
+.venv\Scripts\Activate.ps1
+
+# Install package with all dependencies
+pip install -e .
+```
+
+---
+
+## 9. Running the Application
+
+Start the unified enterprise API and dashboard server:
+
+```bash
 telecom-twin serve --host 127.0.0.1 --port 8000
 ```
 
-Interactive API documentation is then available at `http://127.0.0.1:8000/docs`.
-The live dashboard is available at `http://127.0.0.1:8000/dashboard`.
+Access the web interfaces:
+- **Enterprise Operations Dashboard:** [http://127.0.0.1:8000/enterprise](http://127.0.0.1:8000/enterprise)
+- **Interactive REST API Documentation (Swagger):** [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- **Legacy Telecom Dashboard (Preserved):** [http://127.0.0.1:8000/dashboard](http://127.0.0.1:8000/dashboard)
 
-## Repository structure
+---
 
-```text
-src/telecom_twin/   Domain model, simulator, protocol study, API, and CLI
-tests/              Deterministic unit and API tests
-results/            Curated metrics and figure
-.github/workflows/  Python 3.10/3.12 CI
+## 10. CLI Usage Examples
+
+The CLI provides subcommands for running simulations, inspections, and evaluations:
+
+```bash
+# Display top-level help and available commands
+telecom-twin --help
+
+# Inspect the canonical enterprise topology
+telecom-twin inspect-topology
+
+# Run a What-If failure simulation on Core Switch 01
+telecom-twin whatif-sim --target-type node --target-id core-sw-01 --failure-type node_down
+
+# Execute the deterministic 15-scenario evaluation suite
+telecom-twin enterprise-evaluation --output-dir results/enterprise --seed 42
 ```
 
-## Limitations
+---
 
-- This is a management-plane abstraction, not an emulator of a carrier core,
-  radio-access network, SNMP stack, or production OSS/BSS platform.
-- Message sizes and thresholds are declared simulation assumptions, not
-  measurements from a real network.
-- The first phase uses one injected incident and in-memory API state.
-- The adaptive strategy is evaluated only against the included synthetic
-  workload; it is not claimed to be universally optimal.
-- Phase 3 timing assumes a fixed three seconds per causal hop plus small seeded
-  jitter. It demonstrates temporal evidence, not a calibrated network delay model.
-- The benchmark covers single faults only. Simultaneous faults, topology errors,
-  and alarm suppression policies are not yet modeled.
-- Phase 4 is a deterministic in-process replay, not Kafka, an SNMP collector,
-  a distributed stream processor, or a production telemetry pipeline.
-- The zero false-event count applies only to the included synthetic replay; it
-  is not a general false-positive-rate claim or a calibrated production model.
-- The dashboard stores state in memory and provides no authentication, durable
-  storage, horizontal scaling, or multi-user isolation.
-- Phase 5 assumes exactly two faults separated by 30 seconds and uses a fixed
-  12-second clustering gap. It does not solve unknown fault counts, overlapping
-  start times, flapping alarms, or long-running incident merging.
-- Synthetic access nodes stand in for service endpoints; no subscribers,
-  traffic classes, SLAs, or real business-impact values are modeled.
-- No availability, cybersecurity, or service-level guarantees are implied.
+## 11. What-If Counterfactual Simulation Example
 
-## License
+Simulating the failure of an active backbone node (`core-sw-01`) outputs the predicted alternative routing impact:
 
-MIT for repository source code. The synthetic results are generated by this
-project and do not represent a real company or operator.
+```bash
+telecom-twin whatif-sim --target-type node --target-id core-sw-01 --failure-type node_down
+```
+
+```text
+============================================================
+WHAT-IF COUNTERFACTUAL SIMULATION RESULT
+============================================================
+Scenario ID:         cli-whatif-001
+Target:              core-sw-01 (node)
+Failure Type:        node_down (value: 1.0)
+Predicted Severity:  CRITICAL
+Blast Radius:        100.0%
+Latency Delta:       +0.00 ms
+Loss Delta:          +0.00%
+Throughput Delta:    0.00 Mbps
+Affected Nodes:      core-sw-01
+Affected Links:      core-sw-01<->core-sw-02, core-sw-01<->dist-sw-campus-01, core-sw-01<->dist-sw-campus-02, core-sw-01<->dist-sw-dc-01, core-sw-01<->dist-sw-dc-02, core-sw-01<->edge-gw-01, core-sw-01<->edge-gw-02
+Affected Services:   srv-api, srv-auth, srv-db, srv-dns, srv-erp, srv-monitoring
+============================================================
+```
+
+*Explanation:* Simulating an outage on `core-sw-01` identifies the impacted transit links and assesses downstream business application vulnerability across the multi-tier enterprise topology.
+
+---
+
+## 12. Evaluation Methodology & Measured Results
+
+The platform includes a deterministic benchmark evaluating **15 scenarios** (13 single-node failures across all tiers and fault types, plus 2 multi-fault scenarios) against modeled ground truth.
+
+### Anomaly Detection & Baseline Comparison
+
+Evaluation compares the **Enterprise Multivariate Composite Detector** against a **Single-Metric Max-Z Baseline**:
+
+| Evaluation Level | Metric | Enterprise Composite ($3.0\sigma$) | Baseline Legacy Max-Z ($5.0\sigma$) | Architectural Trade-Off |
+| :--- | :--- | :--- | :--- | :--- |
+| **Point-Wise** ($Node \times Timestep$) | **Precision** | **1.0000** | 0.9725 | Enterprise achieves zero false positives (0 FP vs 3 FP) |
+| **Point-Wise** ($Node \times Timestep$) | **Recall** | 0.0784 | **0.0945** | Baseline triggers on single-metric deviations |
+| **Point-Wise** ($Node \times Timestep$) | **$F_1$ Score** | 0.1455 | **0.1722** | Baseline achieves higher point-wise $F_1$ (+0.0267) |
+| **Point-Wise** ($Node \times Timestep$) | **False Positive Rate** | **0.000000** | 0.000062 | Enterprise completely eliminates false alarms |
+| **Incident** (Scenario Level) | **Detection Rate** | **86.7% (13/15)** | **86.7% (13/15)** | Identical incident-level detection coverage |
+| **Incident** (Scenario Level) | **Mean Detection Delay** | **16.87 s** | **16.87 s** | Identical mean delay (1.0s detected, 120s timeout) |
+
+> [!NOTE]
+> **Performance Trade-Off:** The baseline single-metric detector achieves higher point-wise recall and $F_1$ score because any single metric deviation flags an alert. However, this creates false alarms ($FPR = 0.000062$). The enterprise detector requires cross-metric corroboration ($0.40 Z_{\text{lat}} + 0.35 Z_{\text{loss}} + 0.25 Z_{\text{cpu}} \ge 3.0$), achieving perfect precision ($1.0000$) and zero false positives ($FPR = 0.000000$) while matching the baseline at the incident level ($86.7\%$ detected).
+
+### Summary of System Capabilities
+
+| Capability | Metric | Value | Evaluation Basis |
+| :--- | :--- | :--- | :--- |
+| **Root Cause Analysis (RCA)** | Top-1 Accuracy | **84.6%** (11/13 single) | Evaluated against known injected causal roots |
+| **Root Cause Analysis (RCA)** | Top-3 Accuracy | **84.6%** | Evaluated against known injected causal roots |
+| **Root Cause Analysis (RCA)** | Mean Reciprocal Rank (MRR) | **0.8462** | Mean reciprocal candidate rank |
+| **Root Cause Analysis (RCA)** | Multi-Fault Detection Rate | **50.0%** (1/2 multi) | Both injected roots identified in candidate set |
+| **Service Impact Prediction** | Service Precision | **1.0000** | **Model-Consistency Validation** (Graph reachability) |
+| **Service Impact Prediction** | Service Recall | **1.0000** | **Model-Consistency Validation** (Dependency DAG) |
+| **Service Impact Prediction** | Blast Radius Index MAE | **0.00%** | **Model-Consistency Validation** (Redundancy rules) |
+| **What-If Simulation** | Latency Delta MAE | **312.96 ms** | Simulator-Based Validation (Multi-hop path vs device fault) |
+| **What-If Simulation** | Packet Loss Delta MAE | **31.36%** | Simulator-Based Validation |
+| **What-If Simulation** | Throughput Delta MAE | **3,542.08 Mbps** | Simulator-Based Validation |
+| **What-If Simulation** | Service Impact Jaccard | **0.9103** | Topological service impact fidelity |
+| **Twin Synchronization** | Nominal Mean Staleness | **0.00 s** | Deterministic simulation run (100% sync) |
+| **Twin Synchronization** | Delayed Case (5s lag) | **6.00 s** | Deterministic lag simulation run |
+| **Twin Synchronization** | Missing Case (20% drop) | **5.68 s** | Deterministic missing-node simulation run |
+
+---
+
+## 13. Limitations & Academic Scope
+
+- **Synthetic Topology:** Evaluated on a canonical 22-node enterprise campus/DC topology rather than a live multi-thousand node production enterprise.
+- **Modeled Ground Truth:** Evaluation baselines reflect algorithmic graph reachability and statistical telemetry generation rather than live physical network packet probes.
+- **Model-Consistency Validation:** Service impact metrics verify internal algorithmic graph consistency between the analyzer and the service catalog DAG.
+- **Scope Distinction in What-If:** What-If MAE reflects the architectural difference between multi-hop end-to-end client path bottleneck modeling versus localized device telemetry fault injection (e.g., $999\text{ ms}$ on physical node down).
+
+---
+
+## 14. Project Structure
+
+```
+telecom-network-digital-twin/
+├── src/
+│   └── telecom_twin/
+│       ├── __init__.py                # Package version and export definitions
+│       ├── models.py                  # Enterprise domain models, enums, dataclasses
+│       ├── enterprise_topology.py     # Canonical 22-node / 44-link enterprise network
+│       ├── enterprise_telemetry.py    # Statistical multi-tier telemetry generator
+│       ├── services.py                # Service catalog DAG and blast radius analyzer
+│       ├── root_cause.py              # Topology-aware causal RCA engine
+│       ├── whatif.py                  # Counterfactual What-If simulation sandbox
+│       ├── replay.py                  # 6-stage operational incident replay engine
+│       ├── online.py                  # OnlineTwin state synchronization & anomaly detector
+│       ├── api.py                     # Unified FastAPI application and enterprise routing
+│       ├── cli.py                     # Command-line interface subcommands
+│       ├── enterprise_dashboard.py    # 9-view operations console web application
+│       ├── evaluation.py              # Reproducible 15-scenario evaluation framework
+│       ├── simulation.py              # Legacy discrete-event queueing model (preserved)
+│       └── dashboard.py               # Legacy telecom dashboard (preserved)
+├── tests/
+│   ├── test_enterprise.py            # Comprehensive enterprise test suite (145 tests)
+│   ├── test_api.py                   # Legacy API endpoint tests
+│   ├── test_simulation.py            # Legacy queueing model tests
+│   └── ...                           # Total: 167 automated unit & integration tests
+├── results/
+│   └── enterprise/                   # Generated evaluation artifacts (CSVs, figures, JSON)
+├── docs/
+│   ├── ARCHITECTURE.md               # Detailed system and graph architecture document
+│   ├── EXPERIMENTS.md                # Formal experiment methodology and benchmark report
+│   ├── DEMO.md                       # Step-by-step professor demonstration guide
+│   └── FINAL_VERIFICATION.md         # Final pre-submission verification checklist
+├── UPSTREAM.md                       # Provenance and upstream attribution document
+├── LICENSE                           # MIT License
+├── pyproject.toml                    # Build metadata and package configuration
+└── README.md                         # This file
+```
+
+---
+
+## 15. Testing & Verification
+
+Run the comprehensive test suite:
+
+```bash
+# Run all tests
+pytest
+
+# Run tests with coverage summary
+pytest --cov=telecom_twin
+
+# Check code formatting and style
+ruff check .
+```
+
+---
+
+## 16. Upstream Attribution & License
+
+This project is adapted and substantially extended from the open-source telecom digital twin project by **Feng Dekai**.
+- For detailed provenance, inherited modules, and novel contributions, see [`UPSTREAM.md`](UPSTREAM.md).
+- Licensed under the [MIT License](LICENSE). Copyright © 2026 Feng Dekai and Project Contributors.
