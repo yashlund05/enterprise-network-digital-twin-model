@@ -1362,6 +1362,273 @@ def test_enterprise_service_impact_immutability() -> None:
     assert len(catalog.graph.nodes()) == orig_dep_graph_nodes
 
 
+# ==============================================================================
+# Phase 6: Enterprise Root Cause Analysis Unit Tests
+# ==============================================================================
+
+
+def test_enterprise_rca_initialization() -> None:
+    """Requirement 1: Enterprise RCA initialization works with defaults and custom weights."""
+    from telecom_twin.root_cause import EnterpriseRootCauseAnalyzer
+
+    analyzer = EnterpriseRootCauseAnalyzer()
+    assert analyzer.causal_graph is not None
+    assert len(analyzer.causal_graph.nodes()) == 22
+    assert "temporal" in analyzer._weights
+    assert "topology" in analyzer._weights
+    assert "anomaly" in analyzer._weights
+    assert "service_impact" in analyzer._weights
+
+    # Empty anomaly input returns empty report
+    empty_report = analyzer.analyze([])
+    assert len(empty_report.candidates) == 0
+    assert empty_report.root_cause_candidate_id is None
+    assert empty_report.multi_fault_detected is False
+
+
+def test_enterprise_rca_single_upstream_fault_ranks_above_downstream_symptoms() -> None:
+    """Requirement 2: Single obvious upstream fault ranks above downstream symptoms."""
+    from telecom_twin.online import AnomalyEvent
+    from telecom_twin.root_cause import analyze_enterprise_root_cause
+
+    # Upstream distribution switch fails first at t=10
+    # Downstream access switch triggers at t=12
+    # Downstream host-api triggers at t=13
+    anomalies = [
+        AnomalyEvent(10, "dist-sw-dc-01", 5.5, 5.0, 4.5, 3.5, "latency_ms", composite_z=5.5, severity="CRITICAL", evidence=("latency anomaly",)),
+        AnomalyEvent(12, "acc-sw-dc-01", 4.2, 4.0, 3.2, 2.5, "latency_ms", composite_z=4.2, severity="WARNING", evidence=("latency anomaly",)),
+        AnomalyEvent(13, "host-api", 3.8, 3.5, 3.0, 2.0, "latency_ms", composite_z=3.8, severity="INFO", evidence=("latency anomaly",)),
+    ]
+
+    report = analyze_enterprise_root_cause(anomalies)
+    assert len(report.candidates) >= 3
+    assert report.root_cause_candidate_id == "dist-sw-dc-01"
+    top_cand = report.candidates[0]
+    assert top_cand.candidate_id == "dist-sw-dc-01"
+    assert top_cand.rank == 1
+
+    # Upstream dist-sw-dc-01 ranks higher than acc-sw-dc-01 and host-api
+    ranks = {c.candidate_id: c.rank for c in report.candidates}
+    assert ranks["dist-sw-dc-01"] < ranks["acc-sw-dc-01"]
+    assert ranks["dist-sw-dc-01"] < ranks["host-api"]
+
+
+def test_enterprise_rca_temporal_precedence_affects_ranking() -> None:
+    """Requirement 3: Temporal precedence strongly affects candidate ranking."""
+    from telecom_twin.online import AnomalyEvent
+    from telecom_twin.root_cause import analyze_enterprise_root_cause
+
+    # Test two symmetrically connected access switches. Switch A triggers 15 seconds before Switch B.
+    anomalies = [
+        AnomalyEvent(10, "acc-sw-dc-01", 4.5, 4.5, 0.0, 0.0, "latency_ms", composite_z=4.5, severity="WARNING", evidence=("latency anomaly",)),
+        AnomalyEvent(25, "acc-sw-dc-02", 4.5, 4.5, 0.0, 0.0, "latency_ms", composite_z=4.5, severity="WARNING", evidence=("latency anomaly",)),
+    ]
+    report = analyze_enterprise_root_cause(anomalies)
+    ranks = {c.candidate_id: c.rank for c in report.candidates}
+    # Earlier event ranks higher due to temporal precedence
+    assert ranks["acc-sw-dc-01"] < ranks["acc-sw-dc-02"]
+
+
+def test_enterprise_rca_topology_relevance_affects_ranking() -> None:
+    """Requirement 4: Topology and path relevance affects candidate ranking."""
+    from telecom_twin.online import AnomalyEvent
+    from telecom_twin.root_cause import analyze_enterprise_root_cause
+
+    # DC infrastructure symptoms
+    anomalies = [
+        AnomalyEvent(10, "dist-sw-dc-01", 4.0, 4.0, 0.0, 0.0, "latency_ms", composite_z=4.0, severity="WARNING", evidence=("latency anomaly",)),
+        AnomalyEvent(11, "acc-sw-dc-01", 4.0, 4.0, 0.0, 0.0, "latency_ms", composite_z=4.0, severity="WARNING", evidence=("latency anomaly",)),
+    ]
+    report = analyze_enterprise_root_cause(anomalies)
+    cand_map = {c.candidate_id: c for c in report.candidates}
+
+    # dist-sw-dc-01 has high topology relevance for DC anomalies
+    assert cand_map["dist-sw-dc-01"].topology_evidence["score"] > 0.60
+
+
+def test_enterprise_rca_uninvolved_node_does_not_rank_as_root_cause() -> None:
+    """Requirement 5: A node not involved in affected paths does not incorrectly rank as root cause."""
+    from telecom_twin.online import AnomalyEvent
+    from telecom_twin.root_cause import analyze_enterprise_root_cause
+
+    # DC symptoms with a small stray/noise anomaly in campus
+    anomalies = [
+        AnomalyEvent(10, "dist-sw-dc-01", 5.2, 5.0, 4.0, 3.0, "latency_ms", composite_z=5.2, severity="CRITICAL", evidence=("latency anomaly",)),
+        AnomalyEvent(11, "acc-sw-dc-01", 4.8, 4.5, 3.5, 2.0, "latency_ms", composite_z=4.8, severity="WARNING", evidence=("latency anomaly",)),
+        AnomalyEvent(12, "host-erp", 4.5, 4.0, 3.0, 1.0, "latency_ms", composite_z=4.5, severity="WARNING", evidence=("latency anomaly",)),
+        # Uninvolved campus switch
+        AnomalyEvent(15, "acc-sw-hq-04", 3.1, 3.0, 0.0, 0.0, "latency_ms", composite_z=3.1, severity="INFO", evidence=("latency anomaly",)),
+    ]
+
+    report = analyze_enterprise_root_cause(anomalies)
+    assert report.root_cause_candidate_id == "dist-sw-dc-01"
+    ranks = {c.candidate_id: c.rank for c in report.candidates}
+    assert ranks["acc-sw-hq-04"] > 3
+
+
+def test_enterprise_rca_service_impact_evidence_contributes_to_confidence() -> None:
+    """Requirement 6: Service-impact evidence contributes to RCA confidence."""
+    from telecom_twin.online import AnomalyEvent
+    from telecom_twin.root_cause import EnterpriseRootCauseAnalyzer
+
+    analyzer = EnterpriseRootCauseAnalyzer()
+    anomalies = [
+        AnomalyEvent(20, "host-db", 5.5, 5.0, 4.0, 3.0, "cpu_percent", composite_z=5.5, severity="CRITICAL", evidence=("cpu anomaly",)),
+    ]
+    report = analyzer.analyze(anomalies, observed_impacted_services=["srv-db", "srv-api", "srv-erp"])
+    top = report.candidates[0]
+    assert top.candidate_id == "host-db"
+    assert any("explains" in ev for ev in top.supporting_evidence)
+
+
+def test_enterprise_rca_redundant_core_failure_does_not_imply_universal_outage() -> None:
+    """Requirement 7: Core-01 failure with Core-02 healthy does not imply universal service outage."""
+    from telecom_twin.online import AnomalyEvent
+    from telecom_twin.root_cause import analyze_enterprise_root_cause
+
+    anomalies = [
+        AnomalyEvent(5, "core-sw-01", 6.0, 6.0, 5.0, 4.0, "latency_ms", composite_z=6.0, severity="CRITICAL", evidence=("latency anomaly",)),
+    ]
+    report = analyze_enterprise_root_cause(anomalies)
+    top = report.candidates[0]
+    assert top.candidate_id == "core-sw-01"
+    assert top.topology_evidence["redundancy_maintained"] is True
+    # Evidence must state alternate path remained available
+    assert any("alternate" in ev.lower() for ev in top.supporting_evidence)
+
+
+def test_enterprise_rca_true_service_host_failure_surfaced() -> None:
+    """Requirement 8: A true service-host failure is correctly surfaced as root cause."""
+    from telecom_twin.online import AnomalyEvent
+    from telecom_twin.root_cause import analyze_enterprise_root_cause
+
+    anomalies = [
+        AnomalyEvent(45, "host-erp", 5.8, 5.0, 4.0, 5.5, "cpu_percent", composite_z=5.8, severity="CRITICAL", evidence=("cpu anomaly",)),
+    ]
+    report = analyze_enterprise_root_cause(anomalies)
+    assert report.root_cause_candidate_id == "host-erp"
+    top = report.candidates[0]
+    assert top.candidate_id == "host-erp"
+    assert top.rank == 1
+    assert "srv-erp" in top.affected_services
+
+
+def test_enterprise_rca_common_upstream_explains_multiple_symptoms() -> None:
+    """Requirement 9: Multiple related anomalies are explained by a common upstream cause."""
+    from telecom_twin.online import AnomalyEvent
+    from telecom_twin.root_cause import analyze_enterprise_root_cause
+
+    # Distribution switch issue affecting multiple DC access switches and hosts
+    anomalies = [
+        AnomalyEvent(10, "dist-sw-dc-01", 5.0, 5.0, 4.0, 3.0, "loss_percent", composite_z=5.0, severity="CRITICAL", evidence=("packet loss anomaly",)),
+        AnomalyEvent(12, "acc-sw-dc-01", 4.0, 4.0, 3.0, 2.0, "loss_percent", composite_z=4.0, severity="WARNING", evidence=("packet loss anomaly",)),
+        AnomalyEvent(12, "acc-sw-dc-02", 4.0, 4.0, 3.0, 2.0, "loss_percent", composite_z=4.0, severity="WARNING", evidence=("packet loss anomaly",)),
+        AnomalyEvent(14, "host-erp", 3.5, 3.5, 2.0, 1.0, "latency_ms", composite_z=3.5, severity="INFO", evidence=("latency anomaly",)),
+        AnomalyEvent(14, "host-api", 3.5, 3.5, 2.0, 1.0, "latency_ms", composite_z=3.5, severity="INFO", evidence=("latency anomaly",)),
+    ]
+    report = analyze_enterprise_root_cause(anomalies)
+    assert report.root_cause_candidate_id == "dist-sw-dc-01"
+    assert report.multi_fault_detected is False
+    top = report.candidates[0]
+    assert len(top.affected_nodes) >= 4
+
+
+def test_enterprise_rca_independent_faults_remain_separate_candidates() -> None:
+    """Requirement 10: Independent multi-faults remain separate candidates and set multi_fault_detected."""
+    from telecom_twin.online import AnomalyEvent
+    from telecom_twin.root_cause import analyze_enterprise_root_cause
+
+    # Disjoint simultaneous faults: one in campus access, one on database host in DC
+    anomalies = [
+        AnomalyEvent(10, "acc-sw-hq-01", 5.2, 5.0, 4.0, 2.0, "latency_ms", composite_z=5.2, severity="CRITICAL", evidence=("latency anomaly",)),
+        AnomalyEvent(10, "host-db", 5.5, 4.0, 2.0, 5.5, "cpu_percent", composite_z=5.5, severity="CRITICAL", evidence=("cpu anomaly",)),
+    ]
+    report = analyze_enterprise_root_cause(anomalies)
+    top_candidates = [c.candidate_id for c in report.candidates[:2]]
+    assert "acc-sw-hq-01" in top_candidates
+    assert "host-db" in top_candidates
+    assert report.multi_fault_detected is True
+
+
+def test_enterprise_rca_confidence_score_normalization() -> None:
+    """Requirement 11: All candidate RCA confidence scores remain strictly in [0.0, 1.0]."""
+    from telecom_twin.online import AnomalyEvent
+    from telecom_twin.root_cause import analyze_enterprise_root_cause
+
+    anomalies = [
+        AnomalyEvent(10, "core-sw-01", 50.0, 50.0, 50.0, 50.0, "latency_ms", composite_z=50.0, severity="CRITICAL", evidence=("latency anomaly",)),
+        AnomalyEvent(12, "host-erp", 1.0, 1.0, 0.0, 0.0, "latency_ms", composite_z=1.0, severity="NORMAL", evidence=()),
+    ]
+    report = analyze_enterprise_root_cause(anomalies)
+    for cand in report.candidates:
+        assert 0.0 <= cand.confidence <= 1.0
+
+
+def test_enterprise_rca_evidence_fields_populated_deterministically() -> None:
+    """Requirement 12: Evidence fields are populated with clean, structured strings."""
+    from telecom_twin.online import AnomalyEvent
+    from telecom_twin.root_cause import analyze_enterprise_root_cause
+
+    anomalies = [
+        AnomalyEvent(10, "dist-sw-dc-01", 5.0, 5.0, 4.0, 3.0, "latency_ms", composite_z=5.0, severity="CRITICAL", evidence=("latency anomaly",)),
+        AnomalyEvent(14, "acc-sw-dc-01", 4.0, 4.0, 3.0, 2.0, "latency_ms", composite_z=4.0, severity="WARNING", evidence=("latency anomaly",)),
+    ]
+    report = analyze_enterprise_root_cause(anomalies)
+    top = report.candidates[0]
+    assert len(top.supporting_evidence) >= 3
+    assert all(isinstance(ev, str) and len(ev) > 0 for ev in top.supporting_evidence)
+    assert "first_seen_s" in top.temporal_evidence
+    assert "score" in top.topology_evidence
+
+
+def test_enterprise_rca_tie_ordering_is_deterministic() -> None:
+    """Requirement 13: Candidates with identical confidence break ties alphabetically by candidate_id."""
+    from telecom_twin.online import AnomalyEvent
+    from telecom_twin.root_cause import analyze_enterprise_root_cause
+
+    # Two identical access switches with identical telemetry and timestamps
+    anomalies = [
+        AnomalyEvent(10, "acc-sw-hq-02", 4.0, 4.0, 0.0, 0.0, "latency_ms", composite_z=4.0, severity="WARNING", evidence=("latency anomaly",)),
+        AnomalyEvent(10, "acc-sw-hq-01", 4.0, 4.0, 0.0, 0.0, "latency_ms", composite_z=4.0, severity="WARNING", evidence=("latency anomaly",)),
+    ]
+    report = analyze_enterprise_root_cause(anomalies)
+    cand_ids = [c.candidate_id for c in report.candidates[:2]]
+    # Since confidence is equal, alphabetical sort places acc-sw-hq-01 before acc-sw-hq-02
+    assert cand_ids == ["acc-sw-hq-01", "acc-sw-hq-02"]
+
+
+def test_enterprise_rca_determinism_across_runs() -> None:
+    """Requirement 14: Same inputs produce identical RCA reports."""
+    from telecom_twin.online import AnomalyEvent
+    from telecom_twin.root_cause import analyze_enterprise_root_cause
+
+    anomalies = [
+        AnomalyEvent(10, "dist-sw-campus-01", 4.5, 4.0, 3.0, 2.0, "latency_ms", composite_z=4.5, severity="WARNING", evidence=("latency anomaly",)),
+        AnomalyEvent(12, "acc-sw-hq-01", 4.0, 3.5, 2.0, 1.0, "latency_ms", composite_z=4.0, severity="WARNING", evidence=("latency anomaly",)),
+    ]
+    report_1 = analyze_enterprise_root_cause(anomalies)
+    report_2 = analyze_enterprise_root_cause(anomalies)
+
+    assert report_1 == report_2
+    assert report_1.to_dict() == report_2.to_dict()
+
+
+def test_enterprise_rca_legacy_tests_and_functions_preserved() -> None:
+    """Requirement 15: Legacy RCA functions and scenarios remain functional."""
+    from telecom_twin.root_cause import build_scenarios, evaluate_root_cause, rank_root_causes
+    from telecom_twin.topology import generate_topology
+
+    nodes, links = generate_topology()
+    scenarios = build_scenarios(nodes, links)
+    assert len(scenarios) == 3
+    ranking = rank_root_causes(scenarios[0].observed_alarms, nodes, links)
+    assert len(ranking) == 27
+    eval_rows = evaluate_root_cause(nodes, links)
+    assert len(eval_rows) == 3
+    assert all(row["top1_correct"] == 1.0 for row in eval_rows)
+
+
+
 
 
 
