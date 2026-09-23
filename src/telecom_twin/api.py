@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from telecom_twin.dashboard import DASHBOARD_HTML
+from telecom_twin.enterprise_dashboard import ENTERPRISE_DASHBOARD_HTML
 from telecom_twin.enterprise_topology import generate_enterprise_topology
 from telecom_twin.models import WhatIfScenario
 from telecom_twin.multifault import run_multi_fault_trials
@@ -453,4 +454,17 @@ def get_enterprise_evaluation() -> dict:
         ),
         "available_metrics": [],
     }
+
+
+@app.get("/api/enterprise/twin/state")
+def get_enterprise_twin_state() -> dict:
+    """Return read-only snapshot of current enterprise digital twin state."""
+    return enterprise_twin.snapshot()
+
+
+@app.get("/enterprise", response_class=HTMLResponse)
+def enterprise_dashboard() -> str:
+    """Return the dedicated Enterprise Network Operations Center dashboard."""
+    return ENTERPRISE_DASHBOARD_HTML
+
 

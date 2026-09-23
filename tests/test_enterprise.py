@@ -2430,3 +2430,199 @@ def test_cli_enterprise_evaluation_no_fake_metrics(capsys) -> None:
     assert "Enterprise Evaluation Engine: NOT YET AVAILABLE" in captured.out
     assert "No synthetic or fabricated metrics generated." in captured.out
 
+
+# ==============================================================================
+# Phase 9: Enterprise Dashboard Web Application Unit Tests
+# ==============================================================================
+
+
+def test_enterprise_dashboard_route_success() -> None:
+    """Phase 9 - Test 1: /enterprise route responds successfully with HTTP 200."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    response = client.get("/enterprise")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Enterprise Network Operations Center" in response.text
+
+
+def test_legacy_dashboard_route_intact() -> None:
+    """Phase 9 - Test 2: Legacy /dashboard still responds and remains unmodified."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    response = client.get("/dashboard")
+    assert response.status_code == 200
+    assert "text/html" in response.headers["content-type"]
+    assert "Telecom Network Digital Twin" in response.text
+
+
+def test_enterprise_page_structure_and_views() -> None:
+    """Phase 9 - Test 3: Enterprise page loads all 9 required operational views."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    response = client.get("/enterprise")
+    assert response.status_code == 200
+    html = response.text
+
+    # Verify all 9 view panes exist
+    assert 'id="tab-cmd-center"' in html
+    assert 'id="tab-live-twin"' in html
+    assert 'id="tab-topology"' in html
+    assert 'id="tab-incidents"' in html
+    assert 'id="tab-rca"' in html
+    assert 'id="tab-service-impact"' in html
+    assert 'id="tab-what-if"' in html
+    assert 'id="tab-replay"' in html
+    assert 'id="tab-evaluation"' in html
+
+
+def test_enterprise_page_references_expected_api_endpoints() -> None:
+    """Phase 9 - Test 4: Enterprise page JavaScript references all expected API endpoints."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    response = client.get("/enterprise")
+    assert response.status_code == 200
+    html = response.text
+
+    expected_endpoints = [
+        "/api/enterprise/topology",
+        "/api/enterprise/services",
+        "/api/enterprise/health",
+        "/api/enterprise/twin/sync",
+        "/api/enterprise/twin/state",
+        "/api/enterprise/whatif/simulate",
+        "/api/enterprise/replay/timeline",
+        "/api/enterprise/evaluation",
+    ]
+    for ep in expected_endpoints:
+        assert ep in html
+
+
+def test_enterprise_topology_api_data_and_twin_state() -> None:
+    """Phase 9 - Test 5: Enterprise topology and twin state data are accessible for rendering."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    topo_resp = client.get("/api/enterprise/topology")
+    assert topo_resp.status_code == 200
+    topo_data = topo_resp.json()
+    assert topo_data["node_count"] == 22
+    assert topo_data["link_count"] == 44
+
+    # Verify nodes have x, y coordinates
+    for node in topo_data["nodes"]:
+        assert "x" in node
+        assert "y" in node
+        assert "tier" in node
+
+    state_resp = client.get("/api/enterprise/twin/state")
+    assert state_resp.status_code == 200
+    state_data = state_resp.json()
+    assert state_data["node_count"] == 22
+    assert len(state_data["nodes"]) == 22
+
+
+def test_whatif_form_submission_valid_scenario() -> None:
+    """Phase 9 - Test 6: What-If form simulation executes cleanly via API."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    payload = {
+        "target_type": "node",
+        "target_id": "core-sw-01",
+        "failure_type": "node_down",
+        "parameter_value": 1.0,
+    }
+    response = client.post("/api/enterprise/whatif/simulate", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert "core-sw-01" in data["predicted_affected_nodes"]
+    assert data["severity"] == "CRITICAL"
+    assert data["blast_radius_percent"] > 0
+
+
+def test_whatif_form_submission_invalid_handling() -> None:
+    """Phase 9 - Test 7: Invalid What-If form request returns client error cleanly."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    payload = {
+        "target_type": "node",
+        "target_id": "unknown-nonexistent-node",
+        "failure_type": "node_down",
+    }
+    response = client.post("/api/enterprise/whatif/simulate", json=payload)
+    assert response.status_code == 400
+    assert "Unknown enterprise node" in response.json()["detail"]
+
+
+def test_replay_controls_and_timeline_data() -> None:
+    """Phase 9 - Test 8: Replay timeline and step endpoints supply data to controls."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    tl_resp = client.get(
+        "/api/enterprise/replay/timeline", params={"target_node_id": "core-sw-01"}
+    )
+    assert tl_resp.status_code == 200
+    tl_data = tl_resp.json()
+    assert tl_data["total_events"] == 6
+    assert tl_data["stages"] == ["NORMAL", "DEGRADATION", "ANOMALY", "RCA", "IMPACT", "RECOVERY"]
+
+    step_resp = client.get("/api/enterprise/replay/step", params={"index": 0})
+    assert step_resp.status_code == 200
+    step_data = step_resp.json()
+    assert step_data["event"]["stage"] == "NORMAL"
+
+
+def test_evaluation_view_does_not_fabricate_metrics() -> None:
+    """Phase 9 - Test 9: Evaluation view/API strictly reports evaluation_not_available."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    eval_resp = client.get("/api/enterprise/evaluation")
+    assert eval_resp.status_code == 200
+    data = eval_resp.json()
+    assert data["status"] == "evaluation_not_available"
+    assert data["available_metrics"] == []
+    # Confirm no fake metrics are reported
+    for forbidden in ("accuracy", "precision", "recall", "f1", "f1_score"):
+        assert forbidden not in data
+
+
+def test_existing_api_endpoints_continue_passing() -> None:
+    """Phase 9 - Test 10: Existing legacy API endpoints continue passing all checks."""
+    from fastapi.testclient import TestClient
+
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+    assert client.get("/health").status_code == 200
+    assert client.get("/topology").status_code == 200
+    assert client.get("/telemetry/latest").status_code == 200
+    assert client.get("/alarms").status_code == 200
+    assert client.get("/experiments/protocols").status_code == 200
+
+
