@@ -206,3 +206,149 @@ def test_twin_sync_state_model() -> None:
 
     data = state.to_dict()
     assert data["node_sync_status"] == "synchronized"
+
+
+def test_enterprise_topology_node_count_and_expected_ids() -> None:
+    from telecom_twin.enterprise_topology import (
+        ACCESS_NODE_IDS,
+        CORE_NODE_IDS,
+        DISTRIBUTION_NODE_IDS,
+        EDGE_NODE_IDS,
+        HOST_NODE_IDS,
+        generate_enterprise_topology,
+    )
+
+    nodes, links = generate_enterprise_topology()
+
+    # Exact expected node count (22) and link count (44)
+    assert len(nodes) == 22
+    assert len(links) == 44
+
+    node_ids = {node.node_id for node in nodes}
+    expected_ids = set(
+        EDGE_NODE_IDS
+        + CORE_NODE_IDS
+        + DISTRIBUTION_NODE_IDS
+        + ACCESS_NODE_IDS
+        + HOST_NODE_IDS
+    )
+    assert node_ids == expected_ids
+
+
+def test_enterprise_topology_tier_assignments() -> None:
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+
+    nodes, _ = generate_enterprise_topology()
+    by_tier: dict[str, list[str]] = {}
+    for node in nodes:
+        by_tier.setdefault(node.tier, []).append(node.node_id)
+
+    assert set(by_tier["edge"]) == {"edge-gw-01", "edge-gw-02"}
+    assert set(by_tier["core"]) == {"core-sw-01", "core-sw-02"}
+    assert set(by_tier["distribution"]) == {
+        "dist-sw-campus-01",
+        "dist-sw-campus-02",
+        "dist-sw-dc-01",
+        "dist-sw-dc-02",
+    }
+    assert set(by_tier["access"]) == {
+        "acc-sw-hq-01",
+        "acc-sw-hq-02",
+        "acc-sw-hq-03",
+        "acc-sw-hq-04",
+        "acc-sw-dc-01",
+        "acc-sw-dc-02",
+        "acc-sw-dc-03",
+        "acc-sw-dc-04",
+    }
+    assert set(by_tier["application"]) == {
+        "host-erp",
+        "host-api",
+        "host-db",
+        "host-dns",
+        "host-auth",
+        "host-mon",
+    }
+
+
+def test_enterprise_topology_connectivity_and_determinism() -> None:
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.topology import topology_is_connected
+
+    first_nodes, first_links = generate_enterprise_topology()
+    second_nodes, second_links = generate_enterprise_topology()
+
+    # Determinism
+    assert first_nodes == second_nodes
+    assert first_links == second_links
+
+    # Connectivity
+    assert topology_is_connected(first_nodes, first_links)
+
+
+def test_enterprise_topology_no_duplicate_links() -> None:
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+
+    _, links = generate_enterprise_topology()
+    seen_pairs: set[frozenset[str]] = set()
+    for link in links:
+        pair = frozenset([link.source, link.target])
+        assert pair not in seen_pairs, f"Duplicate link detected between {link.source} and {link.target}"
+        seen_pairs.add(pair)
+    assert len(seen_pairs) == len(links)
+
+
+def test_enterprise_topology_redundancy() -> None:
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+
+    nodes, links = generate_enterprise_topology()
+    adjacency: dict[str, set[str]] = {node.node_id: set() for node in nodes}
+    for link in links:
+        adjacency[link.source].add(link.target)
+        adjacency[link.target].add(link.source)
+
+    # Edge redundancy: edge-gw-01 and edge-gw-02 interconnected and both connected to both core switches
+    assert "edge-gw-02" in adjacency["edge-gw-01"]
+    assert "core-sw-01" in adjacency["edge-gw-01"]
+    assert "core-sw-02" in adjacency["edge-gw-01"]
+    assert "core-sw-01" in adjacency["edge-gw-02"]
+    assert "core-sw-02" in adjacency["edge-gw-02"]
+
+    # Core redundancy: core-sw-01 and core-sw-02 interconnected
+    assert "core-sw-02" in adjacency["core-sw-01"]
+
+    # Distribution redundancy: all distribution switches connect to both core switches
+    for dist in (
+        "dist-sw-campus-01",
+        "dist-sw-campus-02",
+        "dist-sw-dc-01",
+        "dist-sw-dc-02",
+    ):
+        assert "core-sw-01" in adjacency[dist]
+        assert "core-sw-02" in adjacency[dist]
+
+    # Application hosts: each host is connected to at least 2 access switches
+    for host in (
+        "host-erp",
+        "host-api",
+        "host-db",
+        "host-dns",
+        "host-auth",
+        "host-mon",
+    ):
+        connected_switches = [
+            neighbor for neighbor in adjacency[host] if neighbor.startswith("acc-sw-")
+        ]
+        assert len(connected_switches) >= 2, f"Host {host} lacks redundant switch connectivity"
+
+
+def test_topology_module_reexports_enterprise_generator() -> None:
+    from telecom_twin.topology import generate_enterprise_topology, generate_topology
+
+    ent_nodes, ent_links = generate_enterprise_topology()
+    assert len(ent_nodes) == 22
+    assert len(ent_links) == 44
+    legacy_nodes, legacy_links = generate_topology()
+    assert len(legacy_nodes) == 27
+    assert len(legacy_links) == 27
+

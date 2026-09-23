@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import math
 
+from telecom_twin.enterprise_topology import generate_enterprise_topology
 from telecom_twin.models import NetworkLink, NetworkNode
+
+__all__ = [
+    "generate_enterprise_topology",
+    "generate_topology",
+    "topology_is_connected",
+]
 
 
 def generate_topology() -> tuple[list[NetworkNode], list[NetworkLink]]:
