@@ -1,0 +1,16 @@
+scenario_id,fault_type,root_cause,target_id,detected,detection_time_s,detection_delay_s,enterprise_anomalies_detected,baseline_anomalies_detected,precision,recall,f1_score
+sc-01-edge-gw-01-down,node_down,edge-gw-01,edge-gw-01,True,61.0,1.0,7,9,1.0,0.1061,0.1918
+sc-02-core-sw-01-loss,packet_loss,core-sw-01,core-sw-01,True,61.0,1.0,4,6,1.0,0.0606,0.1143
+sc-03-core-sw-02-lat,latency_spike,core-sw-02,core-sw-02,True,61.0,1.0,4,6,1.0,0.0606,0.1143
+sc-04-dist-campus-01-cpu,cpu_saturation,dist-sw-campus-01,dist-sw-campus-01,True,61.0,1.0,6,6,1.0,0.0909,0.1667
+sc-05-dist-campus-02-throttle,bandwidth_throttling,dist-sw-campus-02,dist-sw-campus-02,True,61.0,1.0,4,6,1.0,0.0606,0.1143
+sc-06-dist-dc-01-down,node_down,dist-sw-dc-01,dist-sw-dc-01,True,61.0,1.0,7,9,1.0,0.1061,0.1918
+sc-07-dist-dc-02-loss,packet_loss,dist-sw-dc-02,dist-sw-dc-02,True,61.0,1.0,4,6,1.0,0.0606,0.1143
+sc-08-acc-hq-01-mem,memory_saturation,acc-sw-hq-01,acc-sw-hq-01,False,,120.0,0,0,0.0,0.0,0.0
+sc-09-acc-dc-01-lat,latency_spike,acc-sw-dc-01,acc-sw-dc-01,True,61.0,1.0,5,6,1.0,0.0758,0.1408
+sc-10-host-erp-down,node_down,host-erp,host-erp,True,61.0,1.0,7,9,1.0,0.1061,0.1918
+sc-11-host-api-cpu,cpu_saturation,host-api,host-api,True,61.0,1.0,6,7,1.0,0.0909,0.1667
+sc-12-host-db-mem,memory_saturation,host-db,host-db,False,,120.0,0,1,0.0,0.0,0.0
+sc-13-host-dns-down,node_down,host-dns,host-dns,True,61.0,1.0,7,10,1.0,0.1061,0.1918
+sc-14-multi-campus-dist-acc,cpu_saturation,"dist-sw-campus-01, acc-sw-hq-01","('dist-sw-campus-01', 'acc-sw-hq-01')",True,61.0,1.0,13,12,1.0,0.0985,0.1793
+sc-15-multi-campus-dc,node_down,"host-dns, acc-sw-hq-02","('host-dns', 'acc-sw-hq-02')",True,61.0,1.0,14,16,1.0,0.1061,0.1918

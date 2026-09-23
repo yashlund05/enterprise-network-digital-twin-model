@@ -1,0 +1,14 @@
+scenario_id,target_id,fault_type,pred_latency_delta,obs_latency_delta,latency_abs_error,pred_loss_delta,obs_loss_delta,loss_abs_error,pred_thru_delta,obs_thru_delta,thru_abs_error,service_jaccard,blast_radius_abs_error
+sc-01-edge-gw-01-down,edge-gw-01,node_down,0.25,989.1,988.85,0.0,99.96,99.96,-800.0,-7857.34,7057.34,1.0,0.0
+sc-02-core-sw-01-loss,core-sw-01,packet_loss,0.0,-0.44,0.0,16.25,8.5,7.75,0.0,-11466.63,11466.63,1.0,0.0
+sc-03-core-sw-02-lat,core-sw-02,latency_spike,85.0,84.47,0.53,0.0,0.0,0.0,0.0,-321.32,321.32,1.0,0.0
+sc-04-dist-campus-01-cpu,dist-sw-campus-01,cpu_saturation,0.0,24.48,24.48,0.0,-0.0,0.0,0.0,-166.74,166.74,1.0,80.0
+sc-05-dist-campus-02-throttle,dist-sw-campus-02,bandwidth_throttling,0.0,34.39,34.39,0.0,-0.0,0.0,-500.0,-2733.75,2233.75,1.0,80.0
+sc-06-dist-dc-01-down,dist-sw-dc-01,node_down,0.0,997.64,997.64,0.0,99.99,99.99,0.0,-13432.82,13432.82,1.0,0.0
+sc-07-dist-dc-02-loss,dist-sw-dc-02,packet_loss,0.0,-0.52,0.0,8.5,8.5,0.0,0.0,-8322.99,8322.99,1.0,15.0
+sc-08-acc-hq-01-mem,acc-sw-hq-01,memory_saturation,0.0,-0.35,0.0,0.0,0.0,0.0,0.0,-63.6,63.6,1.0,80.0
+sc-09-acc-dc-01-lat,acc-sw-dc-01,latency_spike,85.0,85.03,0.03,0.0,-0.0,0.0,0.0,-360.59,360.59,1.0,0.0
+sc-10-host-erp-down,host-erp,node_down,0.0,997.71,997.71,0.0,99.99,99.99,-200.0,-1916.72,1716.72,1.0,0.0
+sc-11-host-api-cpu,host-api,cpu_saturation,0.0,25.53,25.53,0.0,0.0,0.0,0.0,-223.92,223.92,0.5,31.76
+sc-12-host-db-mem,host-db,memory_saturation,0.0,0.53,0.53,0.0,0.0,0.0,0.0,-74.63,74.63,0.3333,49.41
+sc-13-host-dns-down,host-dns,node_down,0.0,998.79,998.79,0.0,100.0,100.0,400.0,-205.99,605.99,1.0,0.0

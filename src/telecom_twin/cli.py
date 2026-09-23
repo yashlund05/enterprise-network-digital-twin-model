@@ -88,9 +88,20 @@ def main(argv: list[str] | None = None) -> int:
 
     ent_eval = subparsers.add_parser(
         "enterprise-evaluation",
-        help="Enterprise evaluation engine status and benchmarking (Phase 10)",
+        help="Execute reproducible enterprise digital twin evaluation suite (Phase 10)",
     )
-    ent_eval.add_argument("--output-dir", type=Path, default=Path("results"))
+    ent_eval.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("results/enterprise"),
+        help="Directory to write evaluation artifacts and markdown report",
+    )
+    ent_eval.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Deterministic random seed for reproducible scenario evaluation",
+    )
 
     args = parser.parse_args(argv)
 
@@ -199,13 +210,60 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "enterprise-evaluation":
-        print("Enterprise Evaluation Engine: NOT YET AVAILABLE")
-        print(
-            "Formal evaluation framework (precision, recall, F1, SLA impact) "
-            "will be implemented in Phase 10."
-        )
-        print("No synthetic or fabricated metrics generated.")
-        return 0
+        from telecom_twin.evaluation import run_enterprise_evaluation
+
+        try:
+            print("=" * 65)
+            print("RUNNING REPRODUCIBLE ENTERPRISE DIGITAL TWIN EVALUATION SUITE")
+            print("=" * 65)
+            summary = run_enterprise_evaluation(output_dir=args.output_dir, seed=args.seed)
+
+            ent_det = summary["anomaly_detection"]["enterprise_detector"]
+            base_det = summary["anomaly_detection"]["baseline_legacy_detector"]
+            rca = summary["root_cause_analysis"]
+            svc = summary["service_impact"]
+            wif = summary["whatif_simulation"]
+            twin = summary["twin_synchronization"]
+
+            print(f"Scenarios Executed:        {summary['scenarios_executed']}")
+            print(f"Random Seed:               {summary['random_seed']}")
+            print("-" * 65)
+            print("ANOMALY DETECTION (Node x Timestep):")
+            print(f"  Precision:               {ent_det['precision']:.4f}")
+            print(f"  Recall:                  {ent_det['recall']:.4f}")
+            print(f"  F1 Score:                {ent_det['f1_score']:.4f}")
+            print(f"  Mean Detection Delay:    {ent_det['mean_detection_delay_s']:.2f} s")
+            print(f"  Incident Detection Rate: {ent_det['incident_detection_rate'] * 100:.1f}%")
+            print(f"  Baseline Legacy F1:      {base_det['f1_score']:.4f}")
+            print("-" * 65)
+            print("ROOT CAUSE ANALYSIS (RCA):")
+            print(f"  Top-1 Accuracy:          {rca['top_1_accuracy'] * 100:.1f}%")
+            print(f"  Top-3 Accuracy:          {rca['top_3_accuracy'] * 100:.1f}%")
+            print(f"  Mean Reciprocal Rank:    {rca['mean_reciprocal_rank']:.4f}")
+            print(f"  Multi-Fault Rate:        {rca['multi_fault_identification_rate'] * 100:.1f}%")
+            print("-" * 65)
+            print("SERVICE IMPACT PREDICTION:")
+            print(f"  Service Jaccard:         {svc['jaccard_similarity']:.4f}")
+            print(f"  Service F1:              {svc['service_f1']:.4f}")
+            print(f"  Blast Radius Error:      {svc['blast_radius_mae']:.2f}%")
+            print("-" * 65)
+            print("WHAT-IF COUNTERFACTUAL SIMULATION:")
+            print(f"  Latency MAE:             {wif['latency_mae_ms']:.2f} ms")
+            print(f"  Packet Loss MAE:         {wif['loss_mae_percent']:.2f}%")
+            print(f"  Throughput MAE:          {wif['throughput_mae_mbps']:.2f} Mbps")
+            print(f"  Service Impact Jaccard:  {wif['service_jaccard']:.4f}")
+            print("-" * 65)
+            print("DIGITAL TWIN SYNCHRONIZATION:")
+            print(f"  Nominal Mean Staleness:  {twin['nominal_case_staleness_s']:.2f} s")
+            print(f"  Delayed Staleness (5s):  {twin['delayed_case_staleness_s']:.2f} s")
+            print(f"  Missing Staleness (20%): {twin['missing_case_staleness_s']:.2f} s")
+            print(f"  Topology Consistency:    {twin['nominal_case_consistency']:.4f}")
+            print("=" * 65)
+            print(f"Evaluation artifacts written to: {args.output_dir}")
+            return 0
+        except (RuntimeError, ValueError, OSError, KeyError) as exc:
+            print(f"Error during enterprise evaluation execution: {exc}", file=sys.stderr)
+            return 1
 
     return 0
 

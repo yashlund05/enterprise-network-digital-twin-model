@@ -1,0 +1,16 @@
+scenario_id,target_id,top_1_candidate,top_3_candidates,top_1_correct,top_3_correct,rank,reciprocal_rank,multi_fault_flag,confidence
+sc-01-edge-gw-01-down,edge-gw-01,edge-gw-01,['edge-gw-01'],True,True,1,1.0,False,0.86
+sc-02-core-sw-01-loss,core-sw-01,core-sw-01,"['core-sw-01', 'edge-gw-01', 'edge-gw-02']",True,True,1,1.0,False,0.8605
+sc-03-core-sw-02-lat,core-sw-02,core-sw-02,"['core-sw-02', 'edge-gw-01', 'edge-gw-02']",True,True,1,1.0,False,0.8605
+sc-04-dist-campus-01-cpu,dist-sw-campus-01,dist-sw-campus-01,"['dist-sw-campus-01', 'core-sw-01', 'core-sw-02']",True,True,1,1.0,False,0.876
+sc-05-dist-campus-02-throttle,dist-sw-campus-02,dist-sw-campus-02,"['dist-sw-campus-02', 'core-sw-01', 'core-sw-02']",True,True,1,1.0,False,0.876
+sc-06-dist-dc-01-down,dist-sw-dc-01,dist-sw-dc-01,"['dist-sw-dc-01', 'core-sw-01', 'core-sw-02']",True,True,1,1.0,False,0.8645
+sc-07-dist-dc-02-loss,dist-sw-dc-02,dist-sw-dc-02,"['dist-sw-dc-02', 'core-sw-01', 'core-sw-02']",True,True,1,1.0,False,0.8645
+sc-08-acc-hq-01-mem,acc-sw-hq-01,,[],False,False,not_in_candidates,0.0,False,0.0
+sc-09-acc-dc-01-lat,acc-sw-dc-01,acc-sw-dc-01,"['acc-sw-dc-01', 'dist-sw-dc-01', 'dist-sw-dc-02']",True,True,1,1.0,False,0.8813
+sc-10-host-erp-down,host-erp,host-erp,"['host-erp', 'acc-sw-dc-01', 'acc-sw-dc-02']",True,True,1,1.0,False,1.0
+sc-11-host-api-cpu,host-api,host-api,"['host-api', 'acc-sw-dc-01', 'acc-sw-dc-02']",True,True,1,1.0,False,0.9678
+sc-12-host-db-mem,host-db,,[],False,False,not_in_candidates,0.0,False,0.0
+sc-13-host-dns-down,host-dns,host-dns,"['host-dns', 'acc-sw-dc-03', 'acc-sw-dc-04']",True,True,1,1.0,False,0.952
+sc-14-multi-campus-dist-acc,"('dist-sw-campus-01', 'acc-sw-hq-01')",dist-sw-campus-01,"['dist-sw-campus-01', 'acc-sw-hq-01', 'core-sw-01']",False,False,not_in_candidates,0.0,False,0.918
+sc-15-multi-campus-dc,"('host-dns', 'acc-sw-hq-02')",acc-sw-hq-02,"['acc-sw-hq-02', 'host-dns', 'dist-sw-campus-01']",False,False,not_in_candidates,0.0,True,0.838

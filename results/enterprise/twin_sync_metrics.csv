@@ -1,0 +1,4 @@
+condition,mean_staleness_s,p95_staleness_s,sync_delay_s,synchronized_nodes_pct,topology_consistency_score,overall_sync_status
+fully_synchronized,0.0,0.0,0.0,100.0,1.0,synchronized
+delayed_telemetry_5s,6.0,6.0,5.0,0.0,1.0,missing
+partially_missing_telemetry_20pct,5.68,25.0,0.0,77.3,1.0,missing

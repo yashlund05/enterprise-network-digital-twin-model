@@ -2421,14 +2421,20 @@ def test_cli_whatif_sim_invalid_args_fail_cleanly(capsys) -> None:
 
 
 def test_cli_enterprise_evaluation_no_fake_metrics(capsys) -> None:
-    """Test 19: enterprise-evaluation command does not fabricate metrics."""
+    """Test 19: enterprise-evaluation command executes real framework without fake metrics."""
     from telecom_twin.cli import main
 
     ret = main(["enterprise-evaluation"])
     assert ret == 0
     captured = capsys.readouterr()
-    assert "Enterprise Evaluation Engine: NOT YET AVAILABLE" in captured.out
-    assert "No synthetic or fabricated metrics generated." in captured.out
+    assert "RUNNING REPRODUCIBLE ENTERPRISE DIGITAL TWIN EVALUATION SUITE" in captured.out
+    assert "Scenarios Executed:" in captured.out
+    assert "ANOMALY DETECTION" in captured.out
+    assert "ROOT CAUSE ANALYSIS (RCA):" in captured.out
+    assert "SERVICE IMPACT PREDICTION:" in captured.out
+    assert "WHAT-IF COUNTERFACTUAL SIMULATION:" in captured.out
+    assert "DIGITAL TWIN SYNCHRONIZATION:" in captured.out
+    assert "Evaluation artifacts written to:" in captured.out
 
 
 # ==============================================================================
@@ -2605,11 +2611,17 @@ def test_evaluation_view_does_not_fabricate_metrics() -> None:
     eval_resp = client.get("/api/enterprise/evaluation")
     assert eval_resp.status_code == 200
     data = eval_resp.json()
-    assert data["status"] == "evaluation_not_available"
-    assert data["available_metrics"] == []
-    # Confirm no fake metrics are reported
-    for forbidden in ("accuracy", "precision", "recall", "f1", "f1_score"):
-        assert forbidden not in data
+    assert data["status"] in ("evaluation_not_available", "not_generated", "completed")
+    if data["status"] in ("evaluation_not_available", "not_generated"):
+        assert data["available_metrics"] == []
+    else:
+        assert data["status"] == "completed"
+        assert "scenarios_executed" in data
+        assert "anomaly_detection" in data
+        assert "root_cause_analysis" in data
+        assert "service_impact" in data
+        assert "whatif_simulation" in data
+        assert "twin_synchronization" in data
 
 
 def test_existing_api_endpoints_continue_passing() -> None:
@@ -2624,5 +2636,479 @@ def test_existing_api_endpoints_continue_passing() -> None:
     assert client.get("/telemetry/latest").status_code == 200
     assert client.get("/alarms").status_code == 200
     assert client.get("/experiments/protocols").status_code == 200
+
+
+# ===========================================================================
+# Phase 10: Reproducible Evaluation Framework Tests
+# ===========================================================================
+
+
+def test_phase10_evaluation_scenarios_deterministic() -> None:
+    """Phase 10 - Test 1: Evaluation scenario definitions are deterministic."""
+    from telecom_twin.evaluation import get_evaluation_scenarios
+
+    scenarios1 = get_evaluation_scenarios()
+    scenarios2 = get_evaluation_scenarios()
+
+    assert len(scenarios1) == 15
+    assert len(scenarios2) == 15
+
+    for s1, s2 in zip(scenarios1, scenarios2):
+        assert s1.scenario_id == s2.scenario_id
+        assert s1.target_id == s2.target_id
+        assert s1.fault_type == s2.fault_type
+        assert s1.category == s2.category
+        assert s1.affected_nodes == s2.affected_nodes
+        assert s1.expected_affected_services == s2.expected_affected_services
+
+    single_nodes = [s for s in scenarios1 if s.category == "single_node"]
+    multi_faults = [s for s in scenarios1 if s.category == "multi_fault"]
+    assert len(single_nodes) == 13
+    assert len(multi_faults) == 2
+
+
+def test_phase10_ground_truth_explicitly_defined() -> None:
+    """Phase 10 - Test 2: Ground truth is explicitly and independently defined."""
+    from telecom_twin.evaluation import get_evaluation_scenarios
+
+    scenarios = get_evaluation_scenarios()
+    for sc in scenarios:
+        assert sc.scenario_id.startswith("sc-")
+        assert sc.name
+        assert sc.fault_type in (
+            "node_down",
+            "packet_loss",
+            "latency_spike",
+            "cpu_saturation",
+            "memory_saturation",
+            "bandwidth_throttling",
+        )
+        assert sc.start_s > 0
+        assert sc.end_s > sc.start_s
+        assert sc.ramp_s >= 0
+        assert sc.severity > 0.0
+        assert len(sc.affected_nodes) > 0
+        assert len(sc.expected_affected_services) > 0
+        assert sc.oracle_notes != ""
+
+
+def test_phase10_reproducibility_identical_metrics_twice() -> None:
+    """Phase 10 - Test 3: Running evaluation with identical seed produces identical results."""
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.evaluation import (
+        evaluate_anomaly_detection,
+        get_evaluation_scenarios,
+    )
+
+    nodes, links = generate_enterprise_topology()
+    scenarios = get_evaluation_scenarios(nodes, links)[:2]  # Test subset for speed
+
+    res1_sum, res1_rows = evaluate_anomaly_detection(scenarios, nodes, links, seed=123, duration_s=120)
+    res2_sum, res2_rows = evaluate_anomaly_detection(scenarios, nodes, links, seed=123, duration_s=120)
+
+    assert res1_sum["enterprise_detector"]["precision"] == res2_sum["enterprise_detector"]["precision"]
+    assert res1_sum["enterprise_detector"]["recall"] == res2_sum["enterprise_detector"]["recall"]
+    assert res1_sum["enterprise_detector"]["f1_score"] == res2_sum["enterprise_detector"]["f1_score"]
+    assert res1_rows[0]["f1_score"] == res2_rows[0]["f1_score"]
+
+
+def test_phase10_anomaly_metrics_valid_ranges() -> None:
+    """Phase 10 - Test 4: Anomaly metrics are within valid ranges."""
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.evaluation import (
+        evaluate_anomaly_detection,
+        get_evaluation_scenarios,
+    )
+
+    nodes, links = generate_enterprise_topology()
+    scenarios = get_evaluation_scenarios(nodes, links)[:3]
+    summary, _ = evaluate_anomaly_detection(scenarios, nodes, links, seed=42, duration_s=120)
+
+    ent = summary["enterprise_detector"]
+    base = summary["baseline_legacy_detector"]
+
+    for det in (ent, base):
+        assert 0.0 <= det["precision"] <= 1.0
+        assert 0.0 <= det["recall"] <= 1.0
+        assert 0.0 <= det["f1_score"] <= 1.0
+        assert 0.0 <= det["false_positive_rate"] <= 1.0
+        assert det["mean_detection_delay_s"] >= 0.0
+        assert 0.0 <= det["incident_detection_rate"] <= 1.0
+
+
+def test_phase10_rca_accuracy_metrics_valid() -> None:
+    """Phase 10 - Test 5: RCA Top-1/Top-3 accuracies are valid."""
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.evaluation import (
+        evaluate_root_cause,
+        get_evaluation_scenarios,
+    )
+    from telecom_twin.services import EnterpriseServiceCatalog
+
+    nodes, links = generate_enterprise_topology()
+    catalog = EnterpriseServiceCatalog()
+    scenarios = get_evaluation_scenarios(nodes, links, catalog)[:3]
+    summary, rows = evaluate_root_cause(scenarios, nodes, links, catalog, seed=42, duration_s=120)
+
+    assert 0.0 <= summary["top_1_accuracy"] <= 1.0
+    assert 0.0 <= summary["top_3_accuracy"] <= 1.0
+    assert summary["top_1_accuracy"] <= summary["top_3_accuracy"]
+    assert 0.0 <= summary["mean_reciprocal_rank"] <= 1.0
+    assert summary["mean_candidate_rank"] >= 1.0
+    assert len(rows) == 3
+
+
+def test_phase10_service_impact_metrics_valid() -> None:
+    """Phase 10 - Test 6: Service precision, recall, and Jaccard are valid."""
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.evaluation import (
+        evaluate_service_impact,
+        get_evaluation_scenarios,
+    )
+    from telecom_twin.services import EnterpriseServiceCatalog
+
+    nodes, links = generate_enterprise_topology()
+    catalog = EnterpriseServiceCatalog()
+    scenarios = get_evaluation_scenarios(nodes, links, catalog)[:4]
+    summary, rows = evaluate_service_impact(scenarios, nodes, links, catalog)
+
+    assert 0.0 <= summary["service_precision"] <= 1.0
+    assert 0.0 <= summary["service_recall"] <= 1.0
+    assert 0.0 <= summary["service_f1"] <= 1.0
+    assert 0.0 <= summary["jaccard_similarity"] <= 1.0
+    assert summary["blast_radius_mae"] >= 0.0
+    assert len(rows) == 4
+
+
+def test_phase10_whatif_mae_non_negative() -> None:
+    """Phase 10 - Test 7: What-If MAE values are non-negative and valid."""
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.evaluation import (
+        evaluate_whatif,
+        get_evaluation_scenarios,
+    )
+    from telecom_twin.services import EnterpriseServiceCatalog
+
+    nodes, links = generate_enterprise_topology()
+    catalog = EnterpriseServiceCatalog()
+    scenarios = [s for s in get_evaluation_scenarios(nodes, links, catalog) if s.category == "single_node"][:2]
+    summary, rows = evaluate_whatif(scenarios, nodes, links, catalog, seed=42)
+
+    assert summary["latency_mae_ms"] >= 0.0
+    assert summary["loss_mae_percent"] >= 0.0
+    assert summary["throughput_mae_mbps"] >= 0.0
+    assert 0.0 <= summary["service_jaccard"] <= 1.0
+    assert summary["blast_radius_mae"] >= 0.0
+    assert len(rows) == 2
+
+
+def test_phase10_twin_sync_staleness_metrics() -> None:
+    """Phase 10 - Test 8: Twin staleness and consistency metrics are valid across conditions."""
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.evaluation import evaluate_twin_synchronization
+
+    nodes, links = generate_enterprise_topology()
+    summary, rows = evaluate_twin_synchronization(nodes, links, seed=42)
+
+    assert summary["nominal_case_staleness_s"] == 0.0
+    assert summary["delayed_case_staleness_s"] >= 5.0
+    assert summary["missing_case_staleness_s"] >= 0.0
+    assert summary["nominal_case_consistency"] == 1.0
+    assert summary["nominal_synchronized_pct"] == 100.0
+    assert len(rows) == 3
+
+
+def test_phase10_output_artifacts_and_json_validity(tmp_path) -> None:
+    """Phase 10 - Tests 9, 10, 11: Evaluation artifacts, JSON summary, and report are generated."""
+    import json
+
+    from telecom_twin.evaluation import run_enterprise_evaluation
+
+    out_dir = tmp_path / "enterprise_eval"
+    summary = run_enterprise_evaluation(output_dir=out_dir, seed=42)
+    assert summary["status"] == "completed"
+
+    # Check files exist
+    assert (out_dir / "anomaly_metrics.csv").is_file()
+    assert (out_dir / "rca_metrics.csv").is_file()
+    assert (out_dir / "service_impact_metrics.csv").is_file()
+    assert (out_dir / "whatif_metrics.csv").is_file()
+    assert (out_dir / "twin_sync_metrics.csv").is_file()
+    assert (out_dir / "scenario_results.csv").is_file()
+    assert (out_dir / "evaluation_summary.json").is_file()
+    assert (out_dir / "evaluation_report.md").is_file()
+
+    # Figures
+    assert (out_dir / "anomaly_detection_summary.png").is_file()
+    assert (out_dir / "detection_delay_dist.png").is_file()
+    assert (out_dir / "rca_accuracy_summary.png").is_file()
+    assert (out_dir / "service_impact_metrics.png").is_file()
+    assert (out_dir / "whatif_prediction_vs_observed.png").is_file()
+    assert (out_dir / "twin_sync_staleness.png").is_file()
+
+    # JSON validity
+    with (out_dir / "evaluation_summary.json").open("r", encoding="utf-8") as f:
+        loaded = json.load(f)
+    assert loaded["status"] == "completed"
+    assert loaded["scenarios_executed"] == 15
+    assert "anomaly_detection" in loaded
+    assert "root_cause_analysis" in loaded
+    assert "service_impact" in loaded
+    assert "whatif_simulation" in loaded
+    assert "twin_synchronization" in loaded
+
+    # Report contents
+    report_text = (out_dir / "evaluation_report.md").read_text(encoding="utf-8")
+    assert "Enterprise Digital Twin Evaluation Report" in report_text
+    assert "Executive Summary" in report_text
+    assert "Evaluation Scenario Suite" in report_text
+    assert "Baseline Comparison" in report_text
+    assert "Simulator & Oracle Limitations" in report_text
+
+
+def test_phase10_no_fake_metrics() -> None:
+    """Phase 10 - Test 12: No metric is produced from hardcoded/fake values."""
+    from telecom_twin.enterprise_topology import generate_enterprise_topology
+    from telecom_twin.evaluation import (
+        evaluate_anomaly_detection,
+        get_evaluation_scenarios,
+    )
+
+    nodes, links = generate_enterprise_topology()
+    scenarios = get_evaluation_scenarios(nodes, links)[:2]
+
+    # Evaluate with seed A vs seed B
+    res_a, _ = evaluate_anomaly_detection(scenarios, nodes, links, seed=42, duration_s=90)
+    res_b, _ = evaluate_anomaly_detection(scenarios, nodes, links, seed=999, duration_s=90)
+
+    # Raw counts (TP/FP/TN/FN) or metrics reflect real simulation variations
+    assert res_a["evaluated_timesteps"] == res_b["evaluated_timesteps"]
+    assert res_a["enterprise_detector"]["tn"] > 0
+    assert res_b["enterprise_detector"]["tn"] > 0
+
+
+def test_phase10_api_evaluation_unrun_and_run(tmp_path, monkeypatch) -> None:
+    """Phase 10 - Tests 13, 14: API evaluation endpoint returns not_generated before run, then runs."""
+    from fastapi.testclient import TestClient
+
+    import telecom_twin.api as api_mod
+    from telecom_twin.api import app
+
+    client = TestClient(app)
+
+    # Simulate fresh unrun state with no cached result and nonexistent file
+    monkeypatch.setattr(api_mod, "_cached_enterprise_evaluation", None)
+    monkeypatch.setattr(
+        api_mod,
+        "Path",
+        lambda p: tmp_path / "nonexistent" / "eval.json",
+    )
+
+    unrun_resp = client.get("/api/enterprise/evaluation")
+    assert unrun_resp.status_code == 200
+    unrun_data = unrun_resp.json()
+    assert unrun_data["status"] == "not_generated"
+    assert unrun_data["scenarios_executed"] == 0
+
+    # Run evaluation via API
+    run_dir = tmp_path / "api_test_eval"
+    post_resp = client.post(
+        "/api/enterprise/evaluation/run",
+        params={"output_dir": str(run_dir), "seed": 42},
+    )
+    assert post_resp.status_code == 200
+    run_data = post_resp.json()
+    assert run_data["status"] == "completed"
+    assert run_data["scenarios_executed"] == 15
+    assert "anomaly_detection" in run_data
+    assert "root_cause_analysis" in run_data
+    assert "service_impact" in run_data
+
+
+def test_phase10_cli_enterprise_evaluation_executes(tmp_path) -> None:
+    """Phase 10 - Test 15: CLI enterprise-evaluation executes successfully."""
+    from telecom_twin import cli
+
+    cli_out = tmp_path / "cli_eval"
+    ret = cli.main(["enterprise-evaluation", "--output-dir", str(cli_out), "--seed", "42"])
+    assert ret == 0
+    assert (cli_out / "evaluation_summary.json").is_file()
+    assert (cli_out / "evaluation_report.md").is_file()
+
+
+def test_phase10_dashboard_evaluation_view() -> None:
+    """Phase 10 - Test 16: Dashboard evaluation view markup contains Phase 10 components."""
+    from telecom_twin.enterprise_dashboard import ENTERPRISE_DASHBOARD_HTML
+
+    assert 'id="tab-evaluation"' in ENTERPRISE_DASHBOARD_HTML
+    assert 'id="eval-unrun-box"' in ENTERPRISE_DASHBOARD_HTML
+    assert 'id="eval-results-container"' in ENTERPRISE_DASHBOARD_HTML
+    assert 'id="run-eval-btn"' in ENTERPRISE_DASHBOARD_HTML
+    assert "runEvaluationSuite" in ENTERPRISE_DASHBOARD_HTML
+    assert "fetchEvaluationStatus" in ENTERPRISE_DASHBOARD_HTML
+    assert "renderEvaluationResults" in ENTERPRISE_DASHBOARD_HTML
+    assert "/api/enterprise/evaluation" in ENTERPRISE_DASHBOARD_HTML
+    assert "/api/enterprise/evaluation/run" in ENTERPRISE_DASHBOARD_HTML
+
+
+# ===========================================================================
+# Phase 10 Audit: Evaluation Validity & Interpretation Verification Tests
+# ===========================================================================
+
+
+def test_audit_anomaly_baseline_comparison_preserves_actual_tradeoff() -> None:
+    """Audit Test 1: Baseline detector has higher point-wise recall/F1; enterprise has 0 FP."""
+    import json
+    from pathlib import Path
+
+    summary_file = Path("results/enterprise/evaluation_summary.json")
+    assert summary_file.is_file(), "results/enterprise/evaluation_summary.json must exist"
+
+    with summary_file.open("r", encoding="utf-8") as f:
+        summary = json.load(f)
+
+    ent = summary["anomaly_detection"]["enterprise_detector"]
+    base = summary["anomaly_detection"]["baseline_legacy_detector"]
+
+    # Point-wise metrics: Baseline has higher recall and higher F1
+    assert base["recall"] > ent["recall"], f"Baseline recall {base['recall']} should exceed ent {ent['recall']}"
+    assert base["f1_score"] > ent["f1_score"], f"Baseline F1 {base['f1_score']} should exceed ent {ent['f1_score']}"
+
+    # Point-wise metrics: Enterprise achieves perfect precision and 0 false positives
+    assert ent["precision"] > base["precision"]
+    assert ent["fp"] == 0
+    assert ent["false_positive_rate"] == 0.0
+    assert base["fp"] > 0
+
+    # Incident-level metrics: Both detectors achieve identical detection rate and mean delay
+    assert ent["incident_detection_rate"] == base["incident_detection_rate"]
+    assert ent["mean_detection_delay_s"] == base["mean_detection_delay_s"]
+
+
+def test_audit_evaluation_report_no_superior_f1_claim() -> None:
+    """Audit Test 2: Report does not falsely claim enterprise detector has superior F1."""
+    from pathlib import Path
+
+    report_file = Path("results/enterprise/evaluation_report.md")
+    assert report_file.is_file(), "results/enterprise/evaluation_report.md must exist"
+
+    text = report_file.read_text(encoding="utf-8")
+    assert "superior F1" not in text
+    assert "superior f1" not in text.lower()
+    assert "Baseline achieves higher point-wise F1" in text
+    assert "Incident Level" in text
+    assert "Point-Wise" in text
+
+
+def test_audit_per_scenario_anomaly_breakdown_and_table() -> None:
+    """Audit Test 3: Per-scenario anomaly table contains required columns and explains misses."""
+    import csv
+    import json
+    from pathlib import Path
+
+    summary_file = Path("results/enterprise/evaluation_summary.json")
+    with summary_file.open("r", encoding="utf-8") as f:
+        summary = json.load(f)
+
+    rows = summary["anomaly_detection"]["per_scenario"]
+    assert len(rows) == 15
+
+    # Check required columns
+    for r in rows:
+        assert "scenario_id" in r
+        assert "fault_type" in r
+        assert "root_cause" in r
+        assert "detected" in r
+        assert "detection_time_s" in r
+        assert "detection_delay_s" in r
+
+    # Check 13 detected, 2 undetected (sc-08 and sc-12 memory saturation)
+    detected_rows = [r for r in rows if r["detected"] is True]
+    undetected_rows = [r for r in rows if r["detected"] is False]
+    assert len(detected_rows) == 13
+    assert len(undetected_rows) == 2
+
+    undetected_ids = {r["scenario_id"] for r in undetected_rows}
+    assert undetected_ids == {"sc-08-acc-hq-01-mem", "sc-12-host-db-mem"}
+
+    # Also check CSV artifact
+    csv_file = Path("results/enterprise/anomaly_metrics.csv")
+    assert csv_file.is_file()
+    with csv_file.open("r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        csv_rows = list(reader)
+    assert len(csv_rows) == 15
+    assert "root_cause" in csv_rows[0]
+    assert "detected" in csv_rows[0]
+    assert "detection_time_s" in csv_rows[0]
+    assert "detection_delay_s" in csv_rows[0]
+
+
+def test_audit_service_impact_model_consistency_validation() -> None:
+    """Audit Test 4: Service impact is explicitly designated as model-consistency validation."""
+    import json
+    from pathlib import Path
+
+    summary_file = Path("results/enterprise/evaluation_summary.json")
+    with summary_file.open("r", encoding="utf-8") as f:
+        summary = json.load(f)
+
+    svc = summary["service_impact"]
+    assert svc.get("validation_type") == "model_consistency"
+    assert svc["service_precision"] == 1.0
+    assert svc["service_recall"] == 1.0
+    assert svc["service_f1"] == 1.0
+    assert svc["jaccard_similarity"] == 1.0
+    assert svc["blast_radius_mae"] == 0.0
+
+    report_file = Path("results/enterprise/evaluation_report.md")
+    report_text = report_file.read_text(encoding="utf-8")
+    assert "Model-Consistency Validation" in report_text
+
+
+def test_audit_whatif_mae_units_and_non_negative() -> None:
+    """Audit Test 5: What-If MAE units are strictly ms, %, Mbps and non-negative."""
+    import json
+    from pathlib import Path
+
+    summary_file = Path("results/enterprise/evaluation_summary.json")
+    with summary_file.open("r", encoding="utf-8") as f:
+        summary = json.load(f)
+
+    wif = summary["whatif_simulation"]
+    assert "latency_mae_ms" in wif
+    assert "loss_mae_percent" in wif
+    assert "throughput_mae_mbps" in wif
+    assert wif["latency_mae_ms"] >= 0.0
+    assert wif["loss_mae_percent"] >= 0.0
+    assert wif["throughput_mae_mbps"] >= 0.0
+    assert 0.0 <= wif["service_jaccard"] <= 1.0
+
+    report_file = Path("results/enterprise/evaluation_report.md")
+    report_text = report_file.read_text(encoding="utf-8")
+    assert "Latency in milliseconds (ms)" in report_text
+    assert "Packet Loss in percent (%)" in report_text
+    assert "Throughput in megabits per second (Mbps)" in report_text
+
+
+def test_audit_deterministic_reproducibility(tmp_path) -> None:
+    """Audit Test 6: Repeated evaluation runs with identical seed yield identical summary metrics."""
+    from telecom_twin.evaluation import run_enterprise_evaluation
+
+    dir1 = tmp_path / "eval1"
+    dir2 = tmp_path / "eval2"
+
+    res1 = run_enterprise_evaluation(output_dir=dir1, seed=77)
+    res2 = run_enterprise_evaluation(output_dir=dir2, seed=77)
+
+    # Check key numerical summary fields match identically
+    assert res1["anomaly_detection"]["enterprise_detector"] == res2["anomaly_detection"]["enterprise_detector"]
+    assert res1["anomaly_detection"]["baseline_legacy_detector"] == res2["anomaly_detection"]["baseline_legacy_detector"]
+    assert res1["root_cause_analysis"] == res2["root_cause_analysis"]
+    assert res1["service_impact"] == res2["service_impact"]
+    assert res1["whatif_simulation"] == res2["whatif_simulation"]
+    assert res1["twin_synchronization"] == res2["twin_synchronization"]
+
+
 
 

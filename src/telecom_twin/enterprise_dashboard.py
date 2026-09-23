@@ -830,40 +830,196 @@ ENTERPRISE_DASHBOARD_HTML = """<!doctype html>
 
     <!-- VIEW 9: EVALUATION & STATS -->
     <div id="tab-evaluation" class="tab-pane">
-      <div class="notice-box warning">
-        <strong>HONEST REPORTING STATUS:</strong> The formal Phase 10 evaluation framework has not yet been executed.
-        In compliance with project integrity principles, no fake precision, recall, accuracy, or F1 scores are fabricated.
+      <div id="eval-loading-banner" style="display:none;" class="notice-box info">
+        <strong>RUNNING EVALUATION SUITE:</strong> Executing 15 deterministic enterprise scenarios... Please wait ~15-20 seconds.
       </div>
-      <div class="panel">
+      <div id="eval-unrun-box" class="panel">
         <div class="panel-header">
-          <h3 class="panel-title">Academic Benchmarking Roadmap</h3>
-          <span class="status-badge status-warning">Phase 10 Pending</span>
+          <h3 class="panel-title">Reproducible Evaluation Framework</h3>
+          <span class="status-badge status-warning">Not Yet Generated</span>
         </div>
-        <div class="grid-equal">
-          <div class="panel" style="background:var(--bg-dark);">
-            <h4 style="margin:0 0 10px 0; color:var(--primary);">Anomaly Detection Metrics</h4>
-            <p style="color:var(--text-muted); font-size:13px;">
-              Will benchmark Precision, Recall, F1, and Detection Latency across multi-fault scenarios and false alarm injection.
-            </p>
+        <div class="notice-box warning" style="margin-bottom:16px;">
+          <strong>HONEST REPORTING STATUS:</strong> The formal Phase 10 evaluation framework has not yet been executed.
+          In compliance with project integrity principles, no metrics are fabricated until an actual benchmark run is executed.
+        </div>
+        <p style="color:var(--text-muted); font-size:13px; margin-bottom:16px;">
+          Click below to execute all 15 deterministic enterprise fault scenarios, evaluate Anomaly Detection, RCA, Service Impact, What-If Simulation, and Twin Synchronization against modeled oracle ground truth, and generate CSV, JSON, Markdown, and Matplotlib figure artifacts.
+        </p>
+        <button class="btn-primary" id="run-eval-btn" onclick="runEvaluationSuite()">
+          &#9654; Run Reproducible Evaluation Suite
+        </button>
+      </div>
+
+      <div id="eval-results-container" style="display:none;">
+        <div class="panel" style="margin-bottom:16px;">
+          <div class="panel-header" style="align-items:center;">
+            <div>
+              <h3 class="panel-title" style="margin-bottom:4px;">Enterprise Evaluation Results</h3>
+              <span style="font-size:12px; color:var(--text-muted);" id="eval-meta-info">15 Scenarios Executed &bull; Modeled Ground Truth</span>
+            </div>
+            <div style="display:flex; gap:10px; align-items:center;">
+              <span class="status-badge status-healthy" id="eval-status-badge">Completed</span>
+              <button class="btn-primary" onclick="runEvaluationSuite()" style="padding:6px 12px; font-size:12px;">Re-Run Evaluation</button>
+            </div>
           </div>
-          <div class="panel" style="background:var(--bg-dark);">
-            <h4 style="margin:0 0 10px 0; color:var(--primary);">Root Cause Analysis Accuracy</h4>
-            <p style="color:var(--text-muted); font-size:13px;">
-              Will evaluate Top-1 and Top-3 candidate correctness under temporal delay and missing telemetry conditions.
-            </p>
+        </div>
+
+        <!-- 5 Metric Group Cards -->
+        <div class="grid-equal" style="margin-bottom:16px;">
+          <!-- 1. Anomaly Detection -->
+          <div class="panel">
+            <h4 style="margin:0 0 12px 0; color:var(--primary); font-size:14px;">1. Anomaly Detection (Point-Wise vs Incident)</h4>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Precision:</span>
+              <strong id="eval-anom-prec">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Recall:</span>
+              <strong id="eval-anom-rec">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">F1 Score:</span>
+              <strong style="color:var(--primary);" id="eval-anom-f1">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Detection Delay:</span>
+              <strong id="eval-anom-delay">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Incident Detection Rate:</span>
+              <strong id="eval-anom-inc">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:12px; padding-top:6px; border-top:1px solid var(--border);">
+              <span style="color:var(--text-muted);">Baseline Legacy F1:</span>
+              <span id="eval-anom-base-f1">-</span>
+            </div>
           </div>
-          <div class="panel" style="background:var(--bg-dark);">
-            <h4 style="margin:0 0 10px 0; color:var(--primary);">Service Blast Radius Reliability</h4>
-            <p style="color:var(--text-muted); font-size:13px;">
-              Evaluates Jaccard similarity between predicted affected services and simulated degradation across DAG dependencies.
-            </p>
+
+          <!-- 2. Root Cause Analysis -->
+          <div class="panel">
+            <h4 style="margin:0 0 12px 0; color:var(--primary); font-size:14px;">2. Root Cause Analysis (RCA)</h4>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Top-1 Accuracy:</span>
+              <strong style="color:var(--healthy);" id="eval-rca-top1">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Top-3 Accuracy:</span>
+              <strong id="eval-rca-top3">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Mean Reciprocal Rank:</span>
+              <strong id="eval-rca-mrr">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Mean Candidate Rank:</span>
+              <strong id="eval-rca-rank">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:12px; padding-top:6px; border-top:1px solid var(--border);">
+              <span style="color:var(--text-muted);">Multi-Fault Detection:</span>
+              <span id="eval-rca-multi">-</span>
+            </div>
           </div>
-          <div class="panel" style="background:var(--bg-dark);">
-            <h4 style="margin:0 0 10px 0; color:var(--primary);">Counterfactual Prediction Error</h4>
-            <p style="color:var(--text-muted); font-size:13px;">
-              Quantifies Mean Absolute Error (MAE) between What-If sandbox predictions and actual fault-injection runs.
-            </p>
+
+          <!-- 3. Service Impact -->
+          <div class="panel">
+            <h4 style="margin:0 0 12px 0; color:var(--primary); font-size:14px;">3. Service Impact (Model-Consistency Validation)</h4>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Precision:</span>
+              <strong id="eval-svc-prec">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Recall:</span>
+              <strong id="eval-svc-rec">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Service F1 Score:</span>
+              <strong id="eval-svc-f1">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Jaccard Similarity:</span>
+              <strong style="color:var(--primary);" id="eval-svc-jaccard">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:12px; padding-top:6px; border-top:1px solid var(--border);">
+              <span style="color:var(--text-muted);">Blast Radius MAE:</span>
+              <span id="eval-svc-bri">-</span>
+            </div>
           </div>
+        </div>
+
+        <div class="grid-equal" style="margin-bottom:16px;">
+          <!-- 4. What-If Simulation -->
+          <div class="panel">
+            <h4 style="margin:0 0 12px 0; color:var(--primary); font-size:14px;">4. What-If Simulation (Bottleneck QoS Validation)</h4>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Latency Delta MAE:</span>
+              <strong id="eval-wif-lat">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Packet Loss Delta MAE:</span>
+              <strong id="eval-wif-loss">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Throughput Delta MAE:</span>
+              <strong id="eval-wif-thru">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Service Impact Jaccard:</span>
+              <strong style="color:var(--primary);" id="eval-wif-jaccard">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:12px; padding-top:6px; border-top:1px solid var(--border);">
+              <span style="color:var(--text-muted);">Blast Radius Error:</span>
+              <span id="eval-wif-bri">-</span>
+            </div>
+          </div>
+
+          <!-- 5. Digital Twin Synchronization -->
+          <div class="panel">
+            <h4 style="margin:0 0 12px 0; color:var(--primary); font-size:14px;">5. Digital Twin State Synchronization</h4>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Nominal Mean Staleness:</span>
+              <strong style="color:var(--healthy);" id="eval-twin-nom-stale">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Delayed Staleness (5s):</span>
+              <strong id="eval-twin-del-stale">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Missing Staleness (20%):</span>
+              <strong id="eval-twin-mis-stale">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px; font-size:13px;">
+              <span style="color:var(--text-muted);">Topology Consistency:</span>
+              <strong style="color:var(--primary);" id="eval-twin-consistency">-</strong>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:12px; padding-top:6px; border-top:1px solid var(--border);">
+              <span style="color:var(--text-muted);">Nominal Synced Nodes:</span>
+              <span id="eval-twin-synced-pct">-</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Artifacts Summary Table -->
+        <div class="panel">
+          <h4 style="margin:0 0 12px 0; color:var(--primary); font-size:14px;">Generated Academic Artifacts (results/enterprise/)</h4>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Artifact Type</th>
+                <th>Filename / Path</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td>Summary Report</td><td class="code-cell">results/enterprise/evaluation_report.md</td><td>Full academic markdown evaluation report with LaTeX metrics</td></tr>
+              <tr><td>Structured Data</td><td class="code-cell">results/enterprise/evaluation_summary.json</td><td>Machine-readable JSON schema with all metric groups</td></tr>
+              <tr><td>Anomaly CSV</td><td class="code-cell">results/enterprise/anomaly_metrics.csv</td><td>Per-scenario detection delay, precision, recall, and F1</td></tr>
+              <tr><td>RCA CSV</td><td class="code-cell">results/enterprise/rca_metrics.csv</td><td>Top-1, Top-3, reciprocal rank, and candidate rank per incident</td></tr>
+              <tr><td>Service Impact CSV</td><td class="code-cell">results/enterprise/service_impact_metrics.csv</td><td>Predicted vs ground truth services, Jaccard, and BRI error</td></tr>
+              <tr><td>What-If CSV</td><td class="code-cell">results/enterprise/whatif_metrics.csv</td><td>Latency, loss, and throughput MAE against simulated telemetry</td></tr>
+              <tr><td>Twin Sync CSV</td><td class="code-cell">results/enterprise/twin_sync_metrics.csv</td><td>Staleness and consistency across nominal, delayed, and missing conditions</td></tr>
+              <tr><td>Matplotlib Figures</td><td class="code-cell">results/enterprise/figures/*.png</td><td>6 deterministic evaluation figures (PNG, 150 DPI)</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -1348,11 +1504,95 @@ ENTERPRISE_DASHBOARD_HTML = """<!doctype html>
         const res = await fetch('/api/enterprise/evaluation');
         if (!res.ok) return;
         const d = await res.json();
-        const el = document.getElementById('eval-status-desc');
-        if (el && d.message) el.textContent = d.message;
+        if (d.status === 'completed') {
+          renderEvaluationResults(d);
+        } else {
+          const unrun = document.getElementById('eval-unrun-box');
+          const resCont = document.getElementById('eval-results-container');
+          if (unrun) unrun.style.display = 'block';
+          if (resCont) resCont.style.display = 'none';
+        }
       } catch (err) {
         console.error('Error fetching evaluation status:', err);
       }
+    }
+
+    async function runEvaluationSuite() {
+      const btn = document.getElementById('run-eval-btn');
+      const banner = document.getElementById('eval-loading-banner');
+      if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '&#9203; Running 15 Scenarios...';
+      }
+      if (banner) banner.style.display = 'block';
+
+      try {
+        const res = await fetch('/api/enterprise/evaluation/run', { method: 'POST' });
+        if (!res.ok) throw new Error('Evaluation run failed');
+        const data = await res.json();
+        renderEvaluationResults(data);
+      } catch (err) {
+        alert('Failed to execute evaluation suite: ' + err.message);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '&#9654; Run Reproducible Evaluation Suite';
+        }
+        if (banner) banner.style.display = 'none';
+      }
+    }
+
+    function renderEvaluationResults(d) {
+      const unrun = document.getElementById('eval-unrun-box');
+      const resCont = document.getElementById('eval-results-container');
+      if (unrun) unrun.style.display = 'none';
+      if (resCont) resCont.style.display = 'block';
+
+      const meta = document.getElementById('eval-meta-info');
+      if (meta) meta.textContent = `${d.scenarios_executed || 15} Scenarios Executed • Seed: ${d.random_seed || 42} • Modeled Ground Truth`;
+
+      const ent = d.anomaly_detection?.enterprise_detector || {};
+      const base = d.anomaly_detection?.baseline_legacy_detector || {};
+      const rca = d.root_cause_analysis || {};
+      const svc = d.service_impact || {};
+      const wif = d.whatif_simulation || {};
+      const twin = d.twin_synchronization || {};
+
+      const setText = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val !== undefined && val !== null ? val : '-';
+      };
+
+      setText('eval-anom-prec', ent.precision !== undefined ? ent.precision.toFixed(4) : '-');
+      setText('eval-anom-rec', ent.recall !== undefined ? ent.recall.toFixed(4) : '-');
+      setText('eval-anom-f1', ent.f1_score !== undefined ? ent.f1_score.toFixed(4) : '-');
+      setText('eval-anom-delay', ent.mean_detection_delay_s !== undefined ? `${ent.mean_detection_delay_s.toFixed(2)} s` : '-');
+      setText('eval-anom-inc', ent.incident_detection_rate !== undefined ? `${(ent.incident_detection_rate * 100).toFixed(1)}%` : '-');
+      setText('eval-anom-base-f1', base.f1_score !== undefined ? base.f1_score.toFixed(4) : '-');
+
+      setText('eval-rca-top1', rca.top_1_accuracy !== undefined ? `${(rca.top_1_accuracy * 100).toFixed(1)}%` : '-');
+      setText('eval-rca-top3', rca.top_3_accuracy !== undefined ? `${(rca.top_3_accuracy * 100).toFixed(1)}%` : '-');
+      setText('eval-rca-mrr', rca.mean_reciprocal_rank !== undefined ? rca.mean_reciprocal_rank.toFixed(4) : '-');
+      setText('eval-rca-rank', rca.mean_candidate_rank !== undefined ? rca.mean_candidate_rank.toFixed(2) : '-');
+      setText('eval-rca-multi', rca.multi_fault_identification_rate !== undefined ? `${(rca.multi_fault_identification_rate * 100).toFixed(1)}%` : '-');
+
+      setText('eval-svc-prec', svc.service_precision !== undefined ? svc.service_precision.toFixed(4) : '-');
+      setText('eval-svc-rec', svc.service_recall !== undefined ? svc.service_recall.toFixed(4) : '-');
+      setText('eval-svc-f1', svc.service_f1 !== undefined ? svc.service_f1.toFixed(4) : '-');
+      setText('eval-svc-jaccard', svc.jaccard_similarity !== undefined ? svc.jaccard_similarity.toFixed(4) : '-');
+      setText('eval-svc-bri', svc.blast_radius_mae !== undefined ? `${svc.blast_radius_mae.toFixed(2)}%` : '-');
+
+      setText('eval-wif-lat', wif.latency_mae_ms !== undefined ? `${wif.latency_mae_ms.toFixed(2)} ms` : '-');
+      setText('eval-wif-loss', wif.loss_mae_percent !== undefined ? `${wif.loss_mae_percent.toFixed(2)}%` : '-');
+      setText('eval-wif-thru', wif.throughput_mae_mbps !== undefined ? `${wif.throughput_mae_mbps.toFixed(2)} Mbps` : '-');
+      setText('eval-wif-jaccard', wif.service_jaccard !== undefined ? wif.service_jaccard.toFixed(4) : '-');
+      setText('eval-wif-bri', wif.blast_radius_mae !== undefined ? `${wif.blast_radius_mae.toFixed(2)}%` : '-');
+
+      setText('eval-twin-nom-stale', twin.nominal_case_staleness_s !== undefined ? `${twin.nominal_case_staleness_s.toFixed(2)} s` : '-');
+      setText('eval-twin-del-stale', twin.delayed_case_staleness_s !== undefined ? `${twin.delayed_case_staleness_s.toFixed(2)} s` : '-');
+      setText('eval-twin-mis-stale', twin.missing_case_staleness_s !== undefined ? `${twin.missing_case_staleness_s.toFixed(2)} s` : '-');
+      setText('eval-twin-consistency', twin.nominal_case_consistency !== undefined ? twin.nominal_case_consistency.toFixed(4) : '-');
+      setText('eval-twin-synced-pct', twin.nominal_synchronized_pct !== undefined ? `${twin.nominal_synchronized_pct.toFixed(1)}%` : '-');
     }
 
     // App Initialization

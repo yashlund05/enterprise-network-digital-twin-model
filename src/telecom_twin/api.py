@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -442,18 +443,49 @@ def get_enterprise_replay_step(
     }
 
 
+_cached_enterprise_evaluation: dict | None = None
+
+
 @app.get("/api/enterprise/evaluation")
 def get_enterprise_evaluation() -> dict:
-    """Report availability of enterprise evaluation framework (scheduled for Phase 10)."""
+    """Return enterprise evaluation summary metrics if available, or not_generated status."""
+    global _cached_enterprise_evaluation
+    if _cached_enterprise_evaluation is not None:
+        return _cached_enterprise_evaluation
+
+    summary_file = Path("results/enterprise/evaluation_summary.json")
+    if summary_file.is_file():
+        try:
+            with summary_file.open("r", encoding="utf-8") as f:
+                _cached_enterprise_evaluation = json.load(f)
+                return _cached_enterprise_evaluation
+        except (OSError, json.JSONDecodeError):
+            _cached_enterprise_evaluation = None
+
     return {
-        "status": "evaluation_not_available",
+        "status": "not_generated",
         "message": (
-            "Enterprise evaluation framework is not yet implemented. "
-            "Formal benchmarking metrics (precision, recall, F1, SLA impact) "
-            "will be implemented in Phase 10."
+            "Enterprise evaluation suite has not yet been executed. "
+            "Trigger execution via POST /api/enterprise/evaluation/run "
+            "or CLI command 'telecom-twin enterprise-evaluation'."
         ),
         "available_metrics": [],
+        "scenarios_executed": 0,
     }
+
+
+@app.post("/api/enterprise/evaluation/run")
+def trigger_enterprise_evaluation(
+    output_dir: str = Query(default="results/enterprise"),
+    seed: int = Query(default=42),
+) -> dict:
+    """Execute the deterministic enterprise evaluation suite and cache/return results."""
+    global _cached_enterprise_evaluation
+    from telecom_twin.evaluation import run_enterprise_evaluation
+
+    result = run_enterprise_evaluation(output_dir=output_dir, seed=seed)
+    _cached_enterprise_evaluation = result
+    return result
 
 
 @app.get("/api/enterprise/twin/state")
